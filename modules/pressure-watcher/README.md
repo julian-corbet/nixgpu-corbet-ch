@@ -94,7 +94,7 @@ the field as empty and silently break engine discovery.
 
 ```nix
 {
-  imports = [ nixgpu.kubernetesModules.pressure-watcher ];
+  imports = [ nixgpu.nixidyModules.pressure-watcher ];
 
   nixgpu.pressureWatcher = {
     enable = true;
