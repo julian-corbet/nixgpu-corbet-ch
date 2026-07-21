@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <title>nixgpu &mdash; share one GPU by priority, not by budget</title>
+  <meta name="description" content="Priority-based sharing of one GPU across Kubernetes, containers, and the desktop. Reactive, no budgets, no quotas, no reservations. For cards with in-kernel drivers (AMD today). Pre-alpha.">
+
+  <meta name="theme-color" content="#0b1120" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+
+  <meta property="og:title" content="nixgpu">
+  <meta property="og:description" content="Share one GPU between Kubernetes, containers, and your desktop — by priority, reactively, with no budgets and no reservations.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://nixgpu.corbet.ch">
+  <meta name="twitter:card" content="summary">
+
+  <link rel="stylesheet" href="https://v1.foss.design.corbet.ch/assets/base.css">
+  <link rel="stylesheet" href="./theme.css">
+</head>
+<body>
+
+<header class="hero">
+  <nav>
+    <a href="/" class="nav-brand">nixgpu</a>
+    <div class="nav-links">
+      <a href="https://github.com/julian-corbet/nixgpu-corbet-ch">GitHub</a>
+      <a href="#how">How</a>
+      <a href="#status">Status</a>
+    </div>
+  </nav>
+
+  <div class="hero-content">
+    <h1>nixgpu</h1>
+    <p class="tagline">Share one GPU by priority, not by budget</p>
+    <p class="subtitle">One physical card, many consumers: k8s pods, an LLM
+    server, an image generator, a video transcoder, and your desktop —
+    co-residing when they fit, yielding by priority when they don't. For GPUs
+    with in-kernel drivers (AMD today; Intel structurally compatible; NVIDIA
+    excluded until an in-tree stack matures).</p>
+  </div>
+</header>
+
+<main>
+  <section id="how">
+    <h2>The mechanism</h2>
+    <ul>
+      <li><strong>Co-reside whatever fits.</strong> Nothing is declared,
+        capped, or reserved — decisions use live measured VRAM.</li>
+      <li><strong>Priority decides who leaves.</strong> Compute VRAM is pinned
+        — the kernel cannot evict it — so reclaim means scaling the
+        lowest-priority tenant to zero. A small reactive watcher does exactly
+        that, and nothing else.</li>
+      <li><strong>The desktop is just the top tenant.</strong> Its graphics
+        VRAM spills to GTT under pressure; the watcher reads the spill from
+        sysfs and sheds k8s tenants lowest-first. No host agent, no reserved
+        floor.</li>
+      <li><strong>Video is separate silicon.</strong> The media engine gets
+        its own scheduling lane and is never evicted for compute pressure.</li>
+      <li><strong>The user is always told what is happening.</strong> Cold
+        start, contention, desktop-in-use — one honest waiting page, never a
+        silent hang.</li>
+    </ul>
+  </section>
+
+  <section id="status">
+    <h2>Status</h2>
+    <p><strong>Pre-alpha.</strong> The mechanisms are proven in production on
+    a 16&nbsp;GiB RDNA2 card; this repo is their generalization, and the
+    extraction has not started. The first real artifact is the
+    <a href="https://github.com/julian-corbet/nixgpu-corbet-ch/blob/main/CONTRACT.md">behavior
+    contract</a> the platform is built and tested against. Nothing advertised
+    here is invented — but nothing is packaged yet either.</p>
+  </section>
+
+  <section id="family">
+    <h2>Interoperating set</h2>
+    <p>nixgpu targets a nixidy-rendered, Argo CD-synced cluster — the spine
+    shipped by the sibling <a href="https://nixk3s.corbet.ch">nixk3s</a>.
+    Tenant apps that consume the GPU contract live in
+    <a href="https://nixapps.corbet.ch">nixapps</a>.</p>
+  </section>
+</main>
+
+<footer>
+  <p><a href="https://github.com/julian-corbet/nixgpu-corbet-ch">GitHub</a>
+  &middot; MIT License &copy; 2026 Julian Corbet</p>
+</footer>
+
+</body>
+</html>

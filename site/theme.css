@@ -1,0 +1,31 @@
+/* nixgpu theme — overrides only the accent of the foss v1 base.
+   Retints the central design system accent to a GPU-red, distinct from the
+   other project-family pages (dotkeeper emerald, nixarch teal, nixvps amber).
+
+   Contrast checked against WCAG AA (4.5:1) for both directions:
+     dark:  #f87171 accent text on #0b1120 bg          -> ~7.4:1
+     dark:  #0b1120 accent-text on #f87171 button bg   -> ~7.4:1
+     light: #b91c1c accent text on #ffffff bg          -> ~5.9:1
+     light: #ffffff accent-text on #b91c1c button bg   -> ~5.9:1
+*/
+
+:root {
+  /* Dark mode (and default) accent - GPU red. */
+  --accent: #f87171;
+  --accent-hover: #fca5a5;
+  --accent-dim: rgba(248, 113, 113, 0.12);
+  --accent-glow: rgba(248, 113, 113, 0.08);
+  --accent-text: #0b1120;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    /* Deeper red for light mode - keeps text-on-white contrast at
+       WCAG AA (#b91c1c on #ffffff ~= 5.9:1). */
+    --accent: #b91c1c;
+    --accent-hover: #991b1b;
+    --accent-dim: rgba(185, 28, 28, 0.08);
+    --accent-glow: rgba(185, 28, 28, 0.06);
+    --accent-text: #ffffff;
+  }
+}
