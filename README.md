@@ -59,14 +59,15 @@ behavior spec they implement); the kernel module is still to come:
 
 ## Status
 
-**Pre-alpha, first modules landed.** The mechanisms are real and proven in
-production on a 16 GiB RDNA2 card (continuous batching, VCN-parallel video,
-reactive kill-reclaim, desktop spill-shedding — all verified live).
-`device-tokens`, `priority-ladder`, `pressure-watcher`, and `ondemand-front`
-are extracted and generalized (exported as `nixidyModules.*`; each module
-directory documents its options) — the generalized forms are render-checked
-but **not yet re-verified on a live card**. [CONTRACT.md](CONTRACT.md) is the
-behavior contract the platform is built and tested against.
+**Pre-alpha, and dogfooded: the originating production cluster now runs
+THESE modules.** `device-tokens`, `priority-ladder`, and `pressure-watcher`
+were adopted back into the production single-GPU cluster they were extracted
+from (in-place, no object recreation) — the generalized forms are
+**live-verified on the real 16 GiB RDNA2 card**, scheduling and guarding real
+tenants today. `ondemand-front` is extracted and render-checked but not yet
+live-adopted. Each module directory documents its options
+(`nixidyModules.*`). [CONTRACT.md](CONTRACT.md) is the behavior contract the
+platform is built and tested against.
 
 ## Requirements (deliberate, not negotiable)
 
