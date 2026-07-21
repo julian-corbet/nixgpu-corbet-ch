@@ -83,6 +83,7 @@ image that will never exist in any registry).
 
 ## Status
 
-Generalized from a production single-GPU cluster where this exact wiring has been serving one
-scale-to-zero app since mid-2026. This generalized form (theme rewritten to be site-neutral, no
-hardcoded Service IP) has not yet been re-verified live — review before first deploy.
+Generalized from a production single-GPU cluster where this wiring has been serving scale-to-zero
+apps since mid-2026 — and dogfooded back: since 2026-07-22 that same cluster runs THIS module (an
+in-place cutover; the site theme and pinned Service IP return as consumer values), so the
+generalized form is live-verified in production.

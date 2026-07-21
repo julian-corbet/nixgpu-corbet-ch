@@ -59,15 +59,15 @@ behavior spec they implement); the kernel module is still to come:
 
 ## Status
 
-**Pre-alpha, and dogfooded: the originating production cluster now runs
-THESE modules.** `device-tokens`, `priority-ladder`, and `pressure-watcher`
-were adopted back into the production single-GPU cluster they were extracted
-from (in-place, no object recreation) — the generalized forms are
-**live-verified on the real 16 GiB RDNA2 card**, scheduling and guarding real
-tenants today. `ondemand-front` is extracted and render-checked but not yet
-live-adopted. Each module directory documents its options
-(`nixidyModules.*`). [CONTRACT.md](CONTRACT.md) is the behavior contract the
-platform is built and tested against.
+**Pre-alpha, and fully dogfooded: the originating production cluster runs
+ALL FOUR modules.** `device-tokens`, `priority-ladder`, `pressure-watcher`,
+and `ondemand-front` were adopted back into the production single-GPU cluster
+they were extracted from (in-place, no object recreation) — the generalized
+forms are **live-verified on the real 16 GiB RDNA2 card**, scheduling,
+guarding, and fronting real tenants today (even the tenant label domain runs
+on this repo's `nixgpu.corbet.ch/*` defaults). Each module directory
+documents its options (`nixidyModules.*`). [CONTRACT.md](CONTRACT.md) is the
+behavior contract the platform is built and tested against.
 
 ## Requirements (deliberate, not negotiable)
 
