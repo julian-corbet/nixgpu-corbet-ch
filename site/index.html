@@ -4,14 +4,14 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
 
-  <title>nixgpu &mdash; share one GPU by priority, not by budget</title>
-  <meta name="description" content="Priority-based sharing of one GPU across Kubernetes, containers, and the desktop. Reactive, no budgets, no quotas, no reservations. For cards with in-kernel drivers (AMD today). Pre-alpha.">
+  <title>nixgpu &mdash; share one GPU between k8s, containers, and your desktop</title>
+  <meta name="description" content="Homelab GPU sharing for cards with an in-kernel DRM driver. One card, many consumers &mdash; co-residing when they fit, yielding by priority when they don't. No budgets, no quotas, no reservations. Pre-alpha.">
 
   <meta name="theme-color" content="#0b1120" media="(prefers-color-scheme: dark)">
   <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
 
   <meta property="og:title" content="nixgpu">
-  <meta property="og:description" content="Share one GPU between Kubernetes, containers, and your desktop — by priority, reactively, with no budgets and no reservations.">
+  <meta property="og:description" content="Share one GPU between Kubernetes, containers, and your desktop &mdash; by priority, reactively, with no budgets, no quotas, no reservations.">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://nixgpu.corbet.ch">
   <meta name="twitter:card" content="summary">
@@ -26,66 +26,164 @@
     <a href="/" class="nav-brand">nixgpu</a>
     <div class="nav-links">
       <a href="https://github.com/julian-corbet/nixgpu-corbet-ch">GitHub</a>
-      <a href="#how">How</a>
+      <a href="#modules">Modules</a>
       <a href="#status">Status</a>
+      <a href="#requirements">Requirements</a>
     </div>
   </nav>
 
   <div class="hero-content">
     <h1>nixgpu</h1>
-    <p class="tagline">Share one GPU by priority, not by budget</p>
-    <p class="subtitle">One physical card, many consumers: k8s pods, an LLM
-    server, an image generator, a video transcoder, and your desktop —
-    co-residing when they fit, yielding by priority when they don't. For GPUs
-    with in-kernel drivers (AMD today; Intel structurally compatible; NVIDIA
-    excluded until an in-tree stack matures).</p>
+    <p class="tagline">Share one GPU between Kubernetes, containers, and your desktop</p>
+    <p class="subtitle">By priority, reactively, with no budgets, no quotas, and no
+    reservations. For cards with an in-kernel DRM driver (AMD today; Intel is
+    structurally compatible; NVIDIA excluded until an in-tree driver stack
+    matures). One physical card, many consumers &mdash; k8s pods, an LLM
+    server, an image generator, a video transcoder, and the interactive
+    desktop &mdash; all co-residing when they fit, yielding by priority when
+    they don't.</p>
+    <div class="cta">
+      <a href="#status" class="btn btn-primary">Read the honest status</a>
+      <a href="https://github.com/julian-corbet/nixgpu-corbet-ch" class="btn btn-secondary">View on GitHub</a>
+    </div>
   </div>
 </header>
 
 <main>
-  <section id="how">
-    <h2>The mechanism</h2>
-    <ul>
-      <li><strong>Co-reside whatever fits.</strong> Nothing is declared,
-        capped, or reserved — decisions use live measured VRAM.</li>
-      <li><strong>Priority decides who leaves.</strong> Compute VRAM is pinned
-        — the kernel cannot evict it — so reclaim means scaling the
-        lowest-priority tenant to zero. A small reactive watcher does exactly
-        that, and nothing else.</li>
-      <li><strong>The desktop is just the top tenant.</strong> Its graphics
-        VRAM spills to GTT under pressure; the watcher reads the spill from
-        sysfs and sheds k8s tenants lowest-first. No host agent, no reserved
-        floor.</li>
-      <li><strong>Video is separate silicon.</strong> The media engine gets
-        its own scheduling lane and is never evicted for compute pressure.</li>
-      <li><strong>The user is always told what is happening.</strong> Cold
-        start, contention, desktop-in-use — one honest waiting page, never a
-        silent hang.</li>
-    </ul>
-  </section>
 
-  <section id="status">
-    <h2>Status</h2>
-    <p><strong>Pre-alpha.</strong> The mechanisms are proven in production on
-    a 16&nbsp;GiB RDNA2 card; this repo is their generalization, and the
-    extraction has not started. The first real artifact is the
-    <a href="https://github.com/julian-corbet/nixgpu-corbet-ch/blob/main/CONTRACT.md">behavior
-    contract</a> the platform is built and tested against. Nothing advertised
-    here is invented — but nothing is packaged yet either.</p>
-  </section>
+<section id="status" class="how-it-works">
+  <div class="container">
+    <h2>Status: pre-alpha, contract first</h2>
+    <div class="steps">
+      <div class="step">
+        <div class="step-num">!</div>
+        <h3>CONTRACT.md is the first real artifact</h3>
+        <p>The behavior contract &mdash; what the platform must do &mdash; is
+        written and stable. It was extracted from a production system running
+        all of it on a single 16 GiB RDNA2 card: continuous batching,
+        VCN-parallel video, reactive kill-reclaim, desktop spill-shedding, all
+        verified live.</p>
+      </div>
+      <div class="step">
+        <div class="step-num">!</div>
+        <h3>No modules extracted yet</h3>
+        <p>The mechanisms are real and proven, but nothing is packaged as a
+        reusable module in this repo yet. <code>device-tokens</code>,
+        <code>priority-ladder</code>, <code>pressure-watcher</code>,
+        <code>ondemand-front</code>, and the optional <code>kernel</code>
+        module are landing now, in that order &mdash; not available today.</p>
+      </div>
+      <div class="step">
+        <div class="step-num">!</div>
+        <h3>No invented benchmarks</h3>
+        <p>Nothing on this page claims a tested number that isn't in
+        CONTRACT.md. The contract's behaviors (B1&ndash;B15) are the honest
+        spec; most of them double as the public test suite once modules
+        land.</p>
+      </div>
+    </div>
+  </div>
+</section>
 
-  <section id="family">
-    <h2>Interoperating set</h2>
-    <p>nixgpu targets a nixidy-rendered, Argo CD-synced cluster — the spine
-    shipped by the sibling <a href="https://nixk3s.corbet.ch">nixk3s</a>.
-    Tenant apps that consume the GPU contract live in
-    <a href="https://nixapps.corbet.ch">nixapps</a>.</p>
-  </section>
+<section id="modules" class="features">
+  <div class="container">
+    <h2>Planned modules</h2>
+    <div class="feature-grid">
+      <div class="feature">
+        <h3>device-tokens</h3>
+        <p>Split one card into parallel scheduling lanes (<code>compute</code>
+        + <code>vcn</code> media engine) via a generic device plugin, with
+        co-scheduling under a small concurrency ceiling per lane.</p>
+      </div>
+      <div class="feature">
+        <h3>priority-ladder</h3>
+        <p>The PriorityClass set (<code>desktop</code> &gt;
+        <code>interactive</code> &gt; <code>besteffort</code>) that defines
+        who yields first. Priority is set by intent, not hardwired to an
+        app.</p>
+      </div>
+      <div class="feature">
+        <h3>pressure-watcher</h3>
+        <p>The one hand-rolled piece: a small host-native DaemonSet that
+        watches VRAM pressure and starvation and reclaims by scaling the
+        lowest-priority tenant to zero. Includes desktop GTT-spill detection
+        and a device-plugin registration-zombie guard, both battle-tested in
+        production.</p>
+      </div>
+      <div class="feature">
+        <h3>ondemand-front</h3>
+        <p>A scale-to-zero front (Sablier + Caddy) serving one honest status
+        page while a pod is not-Ready: cold start, GPU contention, and
+        desktop-in-use are the same wait-state, announced the same way.</p>
+      </div>
+      <div class="feature">
+        <h3>kernel <em>(optional)</em></h3>
+        <p>DRM cgroup (dmem) accounting and TTM eviction-order patches for
+        kernels that lack them. The watcher core runs on stock kernels reading
+        sysfs &mdash; this module is only for filling gaps on older
+        kernels.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="architecture">
+  <div class="container">
+    <h2>The pitch</h2>
+    <p>Everyone sharing a single consumer GPU hits the same wall: compute VRAM
+    is <strong>pinned</strong> &mdash; the kernel cannot evict or swap it.
+    Static partitioning wastes the card; per-app VRAM budgets are a fool's
+    errand; and nothing turnkey exists for consumer AMD/Intel silicon
+    (MIG-class isolation is datacenter-only).</p>
+    <div class="arch-details">
+      <div class="arch-detail">
+        <h3>Co-reside whatever fits</h3>
+        <p>Nothing is declared, capped, or reserved. When the card is full and
+        a higher-priority task needs VRAM, the lowest-priority compute tenant
+        is scaled to zero &mdash; the only way to free pinned VRAM.</p>
+      </div>
+      <div class="arch-detail">
+        <h3>The desktop is just the top-priority tenant</h3>
+        <p>Its graphics VRAM spills to GTT under pressure; the watcher reads
+        that global signal from sysfs and sheds k8s tenants lowest-first. No
+        host-side agent, no reservation. Video is separate silicon: the
+        VCN/media engine gets its own scheduling lane and is never evicted for
+        compute VRAM pressure.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="requirements" class="commands">
+  <div class="container">
+    <h2>Requirements (deliberate, not negotiable)</h2>
+    <div class="table-scroll">
+      <table>
+        <tbody>
+          <tr><td>GPU driver</td><td>In-kernel DRM driver required (AMD today; Intel structurally compatible). NVIDIA excluded until an in-tree driver stack matures.</td></tr>
+          <tr><td>Delivery path</td><td>Declarative GitOps only &mdash; nixidy-rendered manifests synced by Argo CD, the spine shipped by the sibling <a href="https://github.com/julian-corbet/nixk3s-corbet-ch">nixk3s</a> project. Hand-applied YAML is not supported.</td></tr>
+          <tr><td>Scope</td><td>Sharing substrate only. The shared LLM serving lane and other tenants ship as app modules in the sibling <a href="https://github.com/julian-corbet/nixapps-corbet-ch">nixapps</a> project.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
 </main>
 
 <footer>
-  <p><a href="https://github.com/julian-corbet/nixgpu-corbet-ch">GitHub</a>
-  &middot; MIT License &copy; 2026 Julian Corbet</p>
+  <div class="container">
+    <div class="footer-links">
+      <a href="https://github.com/julian-corbet/nixgpu-corbet-ch">Source</a>
+      <a href="https://github.com/julian-corbet/nixgpu-corbet-ch/issues">Issues</a>
+      <a href="https://nixk3s.corbet.ch">nixk3s</a>
+      <a href="https://nixapps.corbet.ch">nixapps</a>
+    </div>
+    <p>
+      <a href="https://github.com/julian-corbet/nixgpu-corbet-ch/blob/main/LICENSE">MIT</a> &middot;
+      <a href="https://github.com/julian-corbet">Julian Corbet</a>
+    </p>
+  </div>
 </footer>
 
 </body>
