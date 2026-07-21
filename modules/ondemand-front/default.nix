@@ -176,6 +176,16 @@ in
       '';
     };
 
+    caddyClusterIP = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      description = ''
+        Optional pinned ClusterIP for the Caddy front's Service. Pin it when external ingress
+        (e.g. a tunnel daemon) targets this Service by IP rather than cluster DNS, so a
+        from-scratch rebuild reproduces the same address instead of allocating a new one.
+      '';
+    };
+
     sessionDuration = lib.mkOption {
       type = lib.types.str;
       default = "30m";
@@ -367,7 +377,7 @@ in
         type = "ClusterIP";
         selector.app = "sablier-caddy";
         ports = [{ name = "http"; port = 80; targetPort = 80; }];
-      };
+      } // lib.optionalAttrs (cfg.caddyClusterIP != null) { clusterIP = cfg.caddyClusterIP; };
     };
   };
 }

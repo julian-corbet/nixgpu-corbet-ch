@@ -35,6 +35,7 @@ reason to run two at once anyway.
 | `nixgpu.ondemandFront.sablierImage` | str | `"sablierapp/sablier:1.15.0"` | Sablier server image. |
 | `nixgpu.ondemandFront.caddyImage` | str | *(required)* | Caddy image with the `sablier` plugin compiled in. No sane default exists — see the recipe below. |
 | `nixgpu.ondemandFront.caddyImagePullPolicy` | enum: `Always` \| `IfNotPresent` \| `Never` | `"IfNotPresent"` | Set to `"Never"` if `caddyImage` is imported straight into the node's runtime instead of pulled from a registry. |
+| `nixgpu.ondemandFront.caddyClusterIP` | null or str | `null` | Optional pinned ClusterIP for the Caddy Service (for ingress that targets it by IP; keeps rebuilds address-stable). |
 | `nixgpu.ondemandFront.apps` | attrsOf submodule | `{}` | One entry per fronted app: `{ host, displayName, group, upstream, port }`. `displayName` defaults to the attribute name and is what the waiting page shows while the app starts. Generates one Caddyfile `sablier` + `reverse_proxy` block each. |
 | `nixgpu.ondemandFront.sessionDuration` | str | `"30m"` | Idle time before Sablier scales an app back to zero. |
 | `nixgpu.ondemandFront.refreshFrequency` | str | `"3s"` | Waiting-page auto-refresh / Sablier poll interval. |
