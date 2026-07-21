@@ -34,8 +34,8 @@ reason to run two at once anyway.
 | `nixgpu.ondemandFront.project` | str | `"platform"` | nixidy AppProject for both Argo Applications. |
 | `nixgpu.ondemandFront.sablierImage` | str | `"sablierapp/sablier:1.15.0"` | Sablier server image. |
 | `nixgpu.ondemandFront.caddyImage` | str | *(required)* | Caddy image with the `sablier` plugin compiled in. No sane default exists — see the recipe below. |
-| `nixgpu.ondemandFront.caddyImagePullPolicy` | str | `"IfNotPresent"` | Set to `"Never"` if `caddyImage` is imported straight into the node's runtime instead of pulled from a registry. |
-| `nixgpu.ondemandFront.apps` | attrsOf submodule | `{}` | One entry per fronted app: `{ host, group, upstream, port }`. Generates one Caddyfile `sablier` + `reverse_proxy` block each. |
+| `nixgpu.ondemandFront.caddyImagePullPolicy` | enum: `Always` \| `IfNotPresent` \| `Never` | `"IfNotPresent"` | Set to `"Never"` if `caddyImage` is imported straight into the node's runtime instead of pulled from a registry. |
+| `nixgpu.ondemandFront.apps` | attrsOf submodule | `{}` | One entry per fronted app: `{ host, displayName, group, upstream, port }`. `displayName` defaults to the attribute name and is what the waiting page shows while the app starts. Generates one Caddyfile `sablier` + `reverse_proxy` block each. |
 | `nixgpu.ondemandFront.sessionDuration` | str | `"30m"` | Idle time before Sablier scales an app back to zero. |
 | `nixgpu.ondemandFront.refreshFrequency` | str | `"3s"` | Waiting-page auto-refresh / Sablier poll interval. |
 | `nixgpu.ondemandFront.theme` | str (HTML) | a neutral dark waiting page | Sablier custom theme (Go `html/template`). Override wholesale to reskin. |
@@ -51,8 +51,8 @@ one with `xcaddy`/nix, e.g.:
 
 ```nix
 pkgs.caddy.withPlugins {
-  plugins = [ "github.com/sablierapp/sablier/plugins/caddy@latest" ];
-  hash = "sha256-..."; # nix will tell you the right hash on first build
+  plugins = [ "github.com/sablierapp/sablier/plugins/caddy@v1.15.0" ]; # keep in sync with sablierImage's tag
+  hash = "sha256-..."; # nix will tell you the right hash on first build; re-fetch it whenever you bump the version
 }
 ```
 
@@ -83,6 +83,5 @@ image that will never exist in any registry).
 ## Status
 
 Generalized from a production single-GPU cluster where this exact wiring has been serving one
-scale-to-zero app since mid-2026. This generalized form (renamed labels/options, theme rewritten
-to be site-neutral, no hardcoded Service IP) has not yet been re-verified live — review before
-first deploy.
+scale-to-zero app since mid-2026. This generalized form (theme rewritten to be site-neutral, no
+hardcoded Service IP) has not yet been re-verified live — review before first deploy.

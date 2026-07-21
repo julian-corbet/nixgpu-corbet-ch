@@ -78,8 +78,9 @@ the field as empty and silently break engine discovery.
 | `image` | str | `"bitnami/kubectl:latest"` | Watcher image (needs bash + kubectl). `:latest` is inherited from the source system — pinning a version matching your cluster is wise. |
 | `nodeSelector` | attrsOf str | `{ gpu = "amd"; }` | Run only on GPU nodes. |
 | `managedLabelKey` | str | `"nixgpu.corbet.ch/managed"` | Label key marking every managed GPU tenant (value `"true"`). |
-| `engineLabelKey` | str | `"nixgpu.corbet.ch/engine"` | Label key naming the tenant's GPU engine; value `vcn` = exempt media engine. |
-| `hiWater` | str | `"0.85"` | VRAM-full gate, fraction of total. Pressure is only "real" above this. |
+| `engineLabelKey` | str | `"nixgpu.corbet.ch/engine"` | Label key naming the tenant's GPU engine; value `engineExemptValue` = exempt media engine. |
+| `engineExemptValue` | str | `"vcn"` | Engine-label value marking media-engine tenants that are never compute victims or triggers. |
+| `hiWater` | strMatching `[0-9]*\.?[0-9]+` | `"0.85"` | VRAM-full gate, fraction of total (numeric string; non-numeric values fail at eval). Pressure is only "real" above this. |
 | `graceTicks` | int | `2` | Ticks a tenant must stay starved/spilling before a kill (anti-flap). |
 | `gttDelta` | int | `67108864` | GTT growth per tick (bytes) treated as noise (64 MiB). A noise floor, not a budget. |
 | `tickSeconds` | int | `6` | Seconds per tick. Cooldowns are counted in ticks. |

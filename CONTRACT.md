@@ -154,10 +154,10 @@ generator detects MoE from GGUF metadata and emits an expert-offload config;
 the fit gate becomes *(GPU-resident footprint ≤ VRAM) AND (expert footprint ≤
 free RAM)*.
 
-> B4/B10/B14/B15 concern the shared LLM serving lane. The lane itself ships as
-> an app module in the sibling **nixapps** project; the behaviors stay in this
-> contract because they are platform obligations — any serving lane on a
-> `nixgpu` card must satisfy them.
+> B4/B10/B14/B15 concern the shared LLM serving lane. The lane itself ships
+> as the sibling **nixllm** project; the behaviors stay in this contract
+> because they are platform obligations — any serving lane on a `nixgpu` card
+> must satisfy them.
 
 ## Which behaviors become automated tests vs. stay observed
 

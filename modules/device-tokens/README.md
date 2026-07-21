@@ -56,14 +56,17 @@ time.
 ## Consumer example
 
 ```nix
-{
-  imports = [ nixgpu.nixosModules.device-tokens ]; # or however your flake exposes it
-
-  nixgpu.deviceTokens = {
-    enable = true;
-    project = "platform"; # map to your Argo AppProject for device infra
-    # nodeSelector, devices, etc. left at defaults, or overridden per fleet
-  };
+mkEnvs {
+  envs.<name>.modules = [
+    nixgpu.nixidyModules.device-tokens
+    {
+      nixgpu.deviceTokens = {
+        enable = true;
+        project = "platform"; # map to your Argo AppProject for device infra
+        # nodeSelector, devices, etc. left at defaults, or overridden per fleet
+      };
+    }
+  ];
 }
 ```
 

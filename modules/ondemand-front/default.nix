@@ -47,7 +47,7 @@ let
         group ${app.group}
         session_duration ${cfg.sessionDuration}
         dynamic {
-          display_name "${name}"
+          display_name "${app.displayName}"
           show_details true
           theme ondemand
           refresh_frequency ${cfg.refreshFrequency}
@@ -121,7 +121,7 @@ in
     };
 
     caddyImagePullPolicy = lib.mkOption {
-      type = lib.types.str;
+      type = lib.types.enum [ "Always" "IfNotPresent" "Never" ];
       default = "IfNotPresent";
       description = ''
         Set to `Never` if `caddyImage` is a nix-built image imported straight into the node's
@@ -131,11 +131,21 @@ in
     };
 
     apps = lib.mkOption {
-      type = lib.types.attrsOf (lib.types.submodule {
+      type = lib.types.attrsOf (lib.types.submodule ({ name, ... }: {
         options = {
           host = lib.mkOption {
             type = lib.types.str;
             description = "Hostname this app is reached at; matched against the request's Host header.";
+          };
+
+          displayName = lib.mkOption {
+            type = lib.types.str;
+            default = name;
+            description = ''
+              Human-readable name shown on the waiting page (Sablier's `.DisplayName` template
+              variable) while this app is starting up. Defaults to the attribute name used for this
+              entry in `apps`; override when the attr key is a slug you don't want surfaced to users.
+            '';
           };
 
           group = lib.mkOption {
@@ -157,7 +167,7 @@ in
             description = "Port on `upstream` to proxy to.";
           };
         };
-      });
+      }));
       default = { };
       description = ''
         One entry per app fronted by this waiting page. Each entry generates a Caddyfile
@@ -242,12 +252,10 @@ in
       '';
       description = ''
         The Sablier custom theme (Go html/template), loaded via
-        `--strategy.dynamic.custom-themes-path` with theme name `ondemand`. The default is a neutral,
-        professional waiting page: a status heading, one honest sentence that this is "on-demand,
-        warming up, not broken", and an auto-refreshing status block — no site-specific copy, no
-        personal or company names, no cream/beige backgrounds. Override wholesale to reskin; the
-        template variables (`.DisplayName`, `.SessionDuration`, `.RefreshFrequency`,
-        `.InstanceStates`) are Sablier's own, not this module's.
+        `--strategy.dynamic.custom-themes-path` with theme name `ondemand`. A neutral dark waiting
+        page is shipped by default; supply your own HTML to replace it. The template variables
+        (`.DisplayName`, `.SessionDuration`, `.RefreshFrequency`, `.InstanceStates`) are Sablier's
+        own, not this module's.
       '';
     };
   };

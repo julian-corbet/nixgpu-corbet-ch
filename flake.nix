@@ -11,19 +11,20 @@
       forAllSystems = f: nixpkgs.lib.genAttrs systems f;
     in
     {
-      # Extraction in progress: this repo is being pulled out of a private
-      # production configuration. CONTRACT.md (the behavior spec) is the first
-      # real artifact. Planned module attrset, in extraction order:
-      #
-      #   kubernetesModules.device-tokens    - compute/vcn lane split (generic device plugin)
-      #   kubernetesModules.priority-ladder  - the desktop > interactive > besteffort ladder
-      #   kubernetesModules.pressure-watcher - reactive kill-reclaim + GTT spill detection
-      #   kubernetesModules.ondemand-front   - Sablier + Caddy honest waiting page (B7)
-      #   nixosModules.kernel                - optional dmem/TTM eviction-order patches
-      #
-      # Kubernetes modules target a nixidy-rendered, Argo CD-synced cluster
-      # (see the sibling nixk3s project); NixOS modules target the host.
-      kubernetesModules = { };
+      # nixidy modules (github:arnarg/nixidy) — imported into a nixidy env's
+      # `modules` list and rendered to manifests for Argo CD (see the sibling
+      # nixk3s project for the spine). Extracted from a production single-GPU
+      # cluster; generalized forms not yet re-verified live.
+      nixidyModules = {
+        device-tokens = ./modules/device-tokens;
+        priority-ladder = ./modules/priority-ladder;
+        pressure-watcher = ./modules/pressure-watcher;
+        ondemand-front = ./modules/ondemand-front;
+      };
+
+      # Planned NixOS-side module, not yet extracted:
+      #   nixosModules.kernel - optional dmem accounting / TTM eviction-order patches
+      #   (the pressure-watcher core runs on stock kernels reading sysfs)
       nixosModules = { };
 
       lib = { };

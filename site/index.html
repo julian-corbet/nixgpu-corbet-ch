@@ -53,7 +53,7 @@
 
 <section id="status" class="how-it-works">
   <div class="container">
-    <h2>Status: pre-alpha, contract first</h2>
+    <h2>Status: pre-alpha, first modules landed</h2>
     <div class="steps">
       <div class="step">
         <div class="step-num">!</div>
@@ -66,20 +66,20 @@
       </div>
       <div class="step">
         <div class="step-num">!</div>
-        <h3>No modules extracted yet</h3>
-        <p>The mechanisms are real and proven, but nothing is packaged as a
-        reusable module in this repo yet. <code>device-tokens</code>,
-        <code>priority-ladder</code>, <code>pressure-watcher</code>,
-        <code>ondemand-front</code>, and the optional <code>kernel</code>
-        module are landing now, in that order &mdash; not available today.</p>
+        <h3>Four modules landed, kernel module still to come</h3>
+        <p><code>device-tokens</code>, <code>priority-ladder</code>,
+        <code>pressure-watcher</code>, and <code>ondemand-front</code> have
+        landed &mdash; extracted, generalized, and render-checked, but not yet
+        re-verified on a live card. The optional <code>kernel</code> module is
+        still to come.</p>
       </div>
       <div class="step">
         <div class="step-num">!</div>
         <h3>No invented benchmarks</h3>
         <p>Nothing on this page claims a tested number that isn't in
         CONTRACT.md. The contract's behaviors (B1&ndash;B15) are the honest
-        spec; most of them double as the public test suite once modules
-        land.</p>
+        spec; most of them double as the public test suite once the landed
+        modules are re-verified live.</p>
       </div>
     </div>
   </div>
@@ -87,23 +87,23 @@
 
 <section id="modules" class="features">
   <div class="container">
-    <h2>Planned modules</h2>
+    <h2>Modules</h2>
     <div class="feature-grid">
       <div class="feature">
-        <h3>device-tokens</h3>
+        <h3>device-tokens <em>(landed)</em></h3>
         <p>Split one card into parallel scheduling lanes (<code>compute</code>
         + <code>vcn</code> media engine) via a generic device plugin, with
         co-scheduling under a small concurrency ceiling per lane.</p>
       </div>
       <div class="feature">
-        <h3>priority-ladder</h3>
+        <h3>priority-ladder <em>(landed)</em></h3>
         <p>The PriorityClass set (<code>desktop</code> &gt;
         <code>interactive</code> &gt; <code>besteffort</code>) that defines
         who yields first. Priority is set by intent, not hardwired to an
         app.</p>
       </div>
       <div class="feature">
-        <h3>pressure-watcher</h3>
+        <h3>pressure-watcher <em>(landed)</em></h3>
         <p>The one hand-rolled piece: a small host-native DaemonSet that
         watches VRAM pressure and starvation and reclaims by scaling the
         lowest-priority tenant to zero. Includes desktop GTT-spill detection
@@ -111,13 +111,13 @@
         production.</p>
       </div>
       <div class="feature">
-        <h3>ondemand-front</h3>
+        <h3>ondemand-front <em>(landed)</em></h3>
         <p>A scale-to-zero front (Sablier + Caddy) serving one honest status
         page while a pod is not-Ready: cold start, GPU contention, and
         desktop-in-use are the same wait-state, announced the same way.</p>
       </div>
       <div class="feature">
-        <h3>kernel <em>(optional)</em></h3>
+        <h3>kernel <em>(optional, planned)</em></h3>
         <p>DRM cgroup (dmem) accounting and TTM eviction-order patches for
         kernels that lack them. The watcher core runs on stock kernels reading
         sysfs &mdash; this module is only for filling gaps on older
@@ -162,7 +162,7 @@
         <tbody>
           <tr><td>GPU driver</td><td>In-kernel DRM driver required (AMD today; Intel structurally compatible). NVIDIA excluded until an in-tree driver stack matures.</td></tr>
           <tr><td>Delivery path</td><td>Declarative GitOps only &mdash; nixidy-rendered manifests synced by Argo CD, the spine shipped by the sibling <a href="https://github.com/julian-corbet/nixk3s-corbet-ch">nixk3s</a> project. Hand-applied YAML is not supported.</td></tr>
-          <tr><td>Scope</td><td>Sharing substrate only. The shared LLM serving lane and other tenants ship as app modules in the sibling <a href="https://github.com/julian-corbet/nixapps-corbet-ch">nixapps</a> project.</td></tr>
+          <tr><td>Scope</td><td>Sharing substrate only. The shared LLM serving lane ships in the sibling <a href="https://github.com/julian-corbet/nixllm-corbet-ch">nixllm</a> project (implementing contract behaviors B4/B10/B14/B15); other tenants ship as app modules in the sibling <a href="https://github.com/julian-corbet/nixapps-corbet-ch">nixapps</a> project.</td></tr>
         </tbody>
       </table>
     </div>
@@ -178,6 +178,7 @@
       <a href="https://github.com/julian-corbet/nixgpu-corbet-ch/issues">Issues</a>
       <a href="https://nixk3s.corbet.ch">nixk3s</a>
       <a href="https://nixapps.corbet.ch">nixapps</a>
+      <a href="https://nixllm.corbet.ch">nixllm</a>
     </div>
     <p>
       <a href="https://github.com/julian-corbet/nixgpu-corbet-ch/blob/main/LICENSE">MIT</a> &middot;

@@ -67,35 +67,59 @@ in
           };
         };
       });
-      default = {
-        gpu-desktop = {
-          value = 1000000;
-          preemptionPolicy = "PreemptLowerPriority";
-          description = "Desktop/interactive GPU session sharing the card from outside k8s — always wins";
-        };
-        gpu-interactive = {
-          value = 1000;
-          preemptionPolicy = "PreemptLowerPriority";
-          description = "Latency-sensitive GPU serving";
-        };
-        gpu-besteffort = {
-          value = 100;
-          preemptionPolicy = "Never";
-          description = "Best-effort GPU work — lowest, first reclaimed under VRAM pressure";
-        };
-      };
+      # Defaults live on the config side (see below), not here. `attrsOf` submodule
+      # definitions merge attr-by-attr across definitions, but that merge only kicks
+      # in once there is at least one definition; a bare option default is a single
+      # implicit definition that a consumer's own `classes.<x> = ...` would replace
+      # wholesale, silently dropping the whole three-rung ladder. Keeping the option
+      # default empty and injecting the three rungs from `config` (each wrapped in
+      # `lib.mkDefault`) means a consumer adding `classes.gpu-batch` genuinely merges
+      # alongside the defaults, and a consumer redefining e.g. `classes.gpu-interactive`
+      # overrides only that rung.
+      default = { };
       description = ''
         The priority ladder itself, attrset keyed by PriorityClass name, highest-value rung wins.
-        The default reproduces a production three-rung ladder (a host-side desktop/gaming session
-        that always wins, an interactive serving tier, and a best-effort tier that never preempts
-        and is reclaimed first). Consumers can rename, reorder, add, or drop rungs freely — the
-        pressure watcher only cares about the resulting numeric ordering, not these specific names.
+        The default (set on the config side, wrapped in `lib.mkDefault` per rung) reproduces a
+        production three-rung ladder (a host-side desktop/gaming session that always wins, an
+        interactive serving tier, and a best-effort tier that never preempts and is reclaimed
+        first). Consumers can rename, reorder, add, or drop rungs freely — the pressure watcher
+        only cares about the resulting numeric ordering, not these specific names. Merge
+        semantics: extending means adding a new attr; overriding a rung means redefining that
+        attr; the three defaults stay unless overridden.
       '';
     };
   };
 
   config = lib.mkIf cfg.enable {
+    # The three default rungs, defined here (not as the option's `default`) so that
+    # attrsOf-submodule merging actually applies — see the comment on `classes` above.
+    # Each rung is `lib.mkDefault` so a consumer's own definition of the same key wins
+    # outright, while a consumer defining an unrelated key (e.g. `gpu-batch`) merges in
+    # alongside these three untouched.
+    nixgpu.priorityLadder.classes = {
+      gpu-desktop = lib.mkDefault {
+        value = 1000000;
+        preemptionPolicy = "PreemptLowerPriority";
+        description = "Desktop/interactive GPU session sharing the card from outside k8s — always wins";
+      };
+      gpu-interactive = lib.mkDefault {
+        value = 1000;
+        preemptionPolicy = "PreemptLowerPriority";
+        description = "Latency-sensitive GPU serving";
+      };
+      gpu-besteffort = lib.mkDefault {
+        value = 100;
+        preemptionPolicy = "Never";
+        description = "Best-effort GPU work — lowest, first reclaimed under VRAM pressure";
+      };
+    };
+
     applications.priority-ladder = {
+      # PriorityClass objects are cluster-scoped (no Namespace field on the object
+      # itself), but nixidy's Application model still requires a namespace as the
+      # sync destination for the Argo Application resource — this is that required
+      # application destination, not a namespace the emitted PriorityClasses live in.
+      namespace = "kube-system";
       createNamespace = false; # cluster-scoped PriorityClass objects only, no namespace here
       project = cfg.project;
       syncPolicy.syncOptions.serverSideApply = true;

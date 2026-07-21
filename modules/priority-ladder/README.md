@@ -21,13 +21,20 @@ The default ladder reproduces a production three-rung ordering:
 
 | Rung | Value | Preemption | Meaning |
 |------|-------|------------|---------|
-| `gpu-desktop` | 1000000 | `PreemptLowerPriority` | An interactive session sharing the card from outside k8s (e.g. a desktop/gaming session) — always wins |
-| `gpu-interactive` | 1000 | `PreemptLowerPriority` | Latency-sensitive GPU serving |
-| `gpu-besteffort` | 100 | `Never` | Best-effort GPU work — lowest, first reclaimed under pressure, never itself preempts anyone |
+| `gpu-desktop` | 1000000 | `PreemptLowerPriority` | "Desktop/interactive GPU session sharing the card from outside k8s — always wins" |
+| `gpu-interactive` | 1000 | `PreemptLowerPriority` | "Latency-sensitive GPU serving" |
+| `gpu-besteffort` | 100 | `Never` | "Best-effort GPU work — lowest, first reclaimed under VRAM pressure" |
 
 Consumers are free to rename, add, remove, or reorder rungs — only the
 resulting numeric ordering matters to the pressure watcher, not these
 specific names.
+
+These three rungs are not the option's `default` — they are set on the
+`config` side, each wrapped in `lib.mkDefault`, precisely so that
+`attrsOf`-submodule merging applies. Merge semantics: extending the ladder
+means adding a new attr (e.g. `classes.gpu-batch`), overriding a rung means
+redefining that attr (e.g. `classes.gpu-interactive = { ... }`), and the
+three defaults above stay in place unless a consumer overrides them.
 
 ## Options
 

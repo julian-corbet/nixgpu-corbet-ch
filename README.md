@@ -35,10 +35,10 @@ exposes natively — sysfs VRAM/GTT counters, DRM cgroup accounting, device
 files a plain device plugin can hand out. Out-of-tree proprietary stacks
 don't provide that surface.
 
-## Planned modules
+## Modules
 
-Extraction targets, in order (see [CONTRACT.md](CONTRACT.md) for the behavior
-spec they implement):
+The first four modules have landed (see [CONTRACT.md](CONTRACT.md) for the
+behavior spec they implement); the kernel module is still to come:
 
 - **`device-tokens`** — split one card into parallel scheduling lanes
   (`compute` + `vcn` media engine) via a generic device plugin; co-scheduling
@@ -53,18 +53,20 @@ spec they implement):
 - **`ondemand-front`** — scale-to-zero front (Sablier + Caddy) serving one
   honest status page while a pod is not-Ready: cold start, GPU contention, and
   desktop-in-use are the same wait-state, announced the same way.
-- **`kernel`** *(optional)* — DRM cgroup (dmem) accounting and TTM
-  eviction-order patches for kernels that lack them. The watcher core runs on
-  stock kernels reading sysfs.
+- **`kernel`** *(optional, not yet extracted)* — DRM cgroup (dmem) accounting
+  and TTM eviction-order patches for kernels that lack them. The watcher core
+  runs on stock kernels reading sysfs.
 
 ## Status
 
-**Pre-alpha, extraction not started.** The mechanisms are real and proven in
+**Pre-alpha, first modules landed.** The mechanisms are real and proven in
 production on a 16 GiB RDNA2 card (continuous batching, VCN-parallel video,
-reactive kill-reclaim, desktop spill-shedding — all verified live). This repo
-is the generalization of that system; no module has been extracted yet.
-[CONTRACT.md](CONTRACT.md) — the behavior contract the platform is built and
-tested against — is the first real artifact.
+reactive kill-reclaim, desktop spill-shedding — all verified live).
+`device-tokens`, `priority-ladder`, `pressure-watcher`, and `ondemand-front`
+are extracted and generalized (exported as `nixidyModules.*`; each module
+directory documents its options) — the generalized forms are render-checked
+but **not yet re-verified on a live card**. [CONTRACT.md](CONTRACT.md) is the
+behavior contract the platform is built and tested against.
 
 ## Requirements (deliberate, not negotiable)
 
@@ -80,8 +82,11 @@ Part of an interoperating set — usable independently, designed together:
 
 - [nixk3s](https://github.com/julian-corbet/nixk3s-corbet-ch) — the ground:
   bare-metal k3s on NixOS + the nixidy → Argo CD GitOps spine.
+- [nixllm](https://github.com/julian-corbet/nixllm-corbet-ch) — the serving
+  lane: one shared LLM broker where the model store IS the registry
+  (implements this contract's B4/B10/B14/B15).
 - [nixapps](https://github.com/julian-corbet/nixapps-corbet-ch) — the
-  tenants: curated app modules (LLM serving, image generation, …) that consume
+  tenants: curated app modules (image generation, TTS, …) that consume
   `nixgpu`'s three-line GPU contract.
 
 ## License

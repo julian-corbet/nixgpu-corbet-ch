@@ -37,7 +37,7 @@ let
         '';
       };
       paths = lib.mkOption {
-        type = lib.types.listOf lib.types.str;
+        type = lib.types.nonEmptyListOf lib.types.str;
         description = ''
           Host device node paths that make up one instance of this group.
           Every pod that gets a slot of this lane has every path in this
@@ -127,7 +127,7 @@ in
     };
 
     devices = lib.mkOption {
-      type = lib.types.listOf (lib.types.submodule deviceModule);
+      type = lib.types.nonEmptyListOf (lib.types.submodule deviceModule);
       default = [
         {
           name = "rocm-compute";

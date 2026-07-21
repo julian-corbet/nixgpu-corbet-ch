@@ -54,6 +54,7 @@ let
     GTT_DELTA="''${GTT_DELTA:-67108864}"   # ignore GTT jitter below this (64 MiB) — a noise floor, NOT a per-app budget
     SLEEP="''${TICK:-6}"
     DESK_PRIO="''${DESKTOP_PRIORITY:-2000000}"   # the desktop outranks every PriorityClass (the ladder tops out at 1e6) — it always wins
+    ENGINE_EXEMPT="''${ENGINE_EXEMPT:-vcn}"      # engine-label value marking exempt media-engine tenants (B3)
     GUARD_RESOURCES="''${GUARD_RESOURCES:-}"     # extended resources the device plugin must advertise (space-separated; empty = guard off)
     GUARD_LABEL="''${GUARD_LABEL:-app=gpu-shares-device-plugin}"
     GUARD_NS="''${GUARD_NS:-kube-system}"
@@ -104,7 +105,7 @@ let
       lo_prio=9999999999; lo_pod=""; lo_ns=""
       while IFS='|' read -r ns name prio ready engine; do
         [ -z "$name" ] && continue
-        [ "$engine" = vcn ] && continue            # the media engine is separate silicon (B3) — never a compute victim or trigger
+        [ "$engine" = "$ENGINE_EXEMPT" ] && continue  # the media engine is separate silicon (B3) — never a compute victim or trigger
         [ -z "$prio" ] && prio=0
         key="$ns/$name"
         if [ "$ready" = "false" ]; then            # starved candidate (OOM-restarting / not yet up)
@@ -200,7 +201,7 @@ in
     createNamespace = lib.mkOption {
       type = lib.types.bool;
       default = true;
-      description = "Whether this application creates its namespace. Set false if another module (e.g. the device-tokens or priority-ladder module) already owns it.";
+      description = "Whether this application creates its namespace. Set false if the namespace is created elsewhere in your environment.";
     };
 
     project = lib.mkOption {
@@ -244,8 +245,18 @@ in
       '';
     };
 
-    hiWater = lib.mkOption {
+    engineExemptValue = lib.mkOption {
       type = lib.types.str;
+      default = "vcn";
+      description = ''
+        The engine-label value marking media-engine tenants that are never compute victims or
+        triggers.
+      '';
+    };
+
+    hiWater = lib.mkOption {
+      # strMatching so a non-numeric value fails at eval time instead of inside awk at runtime.
+      type = lib.types.strMatching "[0-9]*\\.?[0-9]+";
       default = "0.85";
       description = ''
         VRAM-full gate as a decimal fraction of total VRAM (string, passed verbatim to awk). Only
@@ -374,6 +385,7 @@ in
                     { name = "GTT_DELTA"; value = toString cfg.gttDelta; }
                     { name = "TICK"; value = toString cfg.tickSeconds; }
                     { name = "DESKTOP_PRIORITY"; value = toString cfg.desktopPriority; }
+                    { name = "ENGINE_EXEMPT"; value = cfg.engineExemptValue; }
                     # Bounce the device plugin when these stick at 0 (registration zombie); empty = guard off.
                     { name = "GUARD_RESOURCES"; value = lib.concatStringsSep " " cfg.guardResources; }
                     { name = "GUARD_LABEL"; value = cfg.guardLabel; }
