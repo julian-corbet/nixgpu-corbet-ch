@@ -88,6 +88,9 @@ Part of an interoperating set — usable independently, designed together:
 - [nixapps](https://github.com/julian-corbet/nixapps-corbet-ch) — the
   tenants: curated app modules (image generation, TTS, …) that consume
   `nixgpu`'s three-line GPU contract.
+- [nixvibe](https://github.com/julian-corbet/nixvibe-corbet-ch) — a coding
+  agent in a real browser terminal; an indirect consumer (HTTP only, no GPU
+  device of its own).
 
 ## License
 
