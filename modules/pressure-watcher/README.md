@@ -85,6 +85,8 @@ the field as empty and silently break engine discovery.
 | `gttDelta` | int | `67108864` | GTT growth per tick (bytes) treated as noise (64 MiB). A noise floor, not a budget. |
 | `tickSeconds` | int | `6` | Seconds per tick. Cooldowns are counted in ticks. |
 | `desktopPriority` | int | `2000000` | Synthetic desktop priority; must outrank every PriorityClass. |
+| `brokerStatusUrl` | str | `""` | Optional status endpoint of a shared multi-model LLM server (e.g. llama-swap `/running`). A shared server's pod stays Ready even when a model can't fit VRAM; set this and the watcher treats a model stuck non-`ready` while the card is full as a starved higher-priority tenant. Empty = off; fail-open; needs `curl`+`jq`. |
+| `brokerPriority` | int | `1000` | Synthetic priority of the broker starvation signal (interactive tier). |
 | `guardResources` | listOf str | `[ "devic.es/rocm-compute" "devic.es/vcn" ]` | Extended resources the registration guard watches; `[ ]` = guard off. |
 | `guardLabel` | str | `"app=gpu-shares-device-plugin"` | Label selector for the device-plugin pod to bounce. |
 | `guardNamespace` | str | `"kube-system"` | Namespace of the device-plugin pod. |

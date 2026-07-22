@@ -59,6 +59,8 @@ let
     GUARD_LABEL="''${GUARD_LABEL:-app=gpu-shares-device-plugin}"
     GUARD_NS="''${GUARD_NS:-kube-system}"
     GUARD_GRACE="''${GUARD_GRACE:-5}"            # ticks a resource must read 0 before the bounce (anti-flap; a plugin rollout re-registers in seconds)
+    BROKER_STATUS_URL="''${BROKER_STATUS_URL:-}"  # optional: a shared multi-model LLM server's status endpoint (e.g. llama-swap /running). Empty = off.
+    BROKER_PRIO="''${BROKER_PRIO:-1000}"          # priority of the broker's model-load-starvation signal (default = interactive tier)
     declare -A starve
 
     log(){ echo "$(date -u +%H:%M:%S)Z $*"; }
@@ -126,6 +128,25 @@ let
         starve[__desktop__]=0
       fi
       gtt_prev=$gtt_now
+
+      # Broker starvation: a shared multi-model LLM server keeps its POD Ready even when a requested
+      # model cannot fit VRAM — it holds that model in a non-"ready" state and retries the load — so
+      # its starvation is INVISIBLE to the pod-readiness signal above (the pod never goes not-Ready).
+      # Ask the server directly: a model stuck non-"ready" while the card is full means a
+      # higher-priority tenant is starved for VRAM, so shed the lowest-priority compute tenant to free
+      # room for the retry. Mirrors the desktop synthetic-tenant pattern. Optional (empty URL = off);
+      # fail-open — an unreachable or unparseable response never fabricates starvation.
+      if [ -n "$BROKER_STATUS_URL" ] && [ "$press" = 1 ]; then
+        nstuck=$(curl -s --max-time 3 "$BROKER_STATUS_URL" 2>/dev/null | jq -r '[.running[]? | select(.state != "ready")] | length' 2>/dev/null)
+        if [ -n "$nstuck" ] && [ "$nstuck" -gt 0 ] 2>/dev/null; then
+          starve[__broker__]=$(( ''${starve[__broker__]:-0} + 1 ))
+          [ "''${starve[__broker__]}" -ge "$GRACE" ] && [ "$BROKER_PRIO" -gt "$hi_prio" ] && { hi_prio=$BROKER_PRIO; hi_pod="broker(model-load starved)"; }
+        else
+          starve[__broker__]=0
+        fi
+      else
+        starve[__broker__]=0
+      fi
 
       if [ "$cd" -gt 0 ]; then
         cd=$((cd-1))                               # a kill is still landing — don't re-decide yet
@@ -294,6 +315,31 @@ in
       '';
     };
 
+    brokerStatusUrl = lib.mkOption {
+      type = lib.types.str;
+      default = "";
+      description = ''
+        Optional HTTP status endpoint of a shared multi-model LLM server (e.g. llama-swap's
+        `/running`, returning `{"running":[{"model":..,"state":"ready"|"starting"|..}]}`). A shared
+        server's pod stays Ready even when a requested model cannot fit VRAM, so its starvation is
+        invisible to pod-readiness alone (B4/B8 gap). When set, the watcher polls this endpoint and
+        treats a model stuck in a non-`ready` state — while the card is VRAM-full — as a starved
+        higher-priority tenant, shedding the lowest-priority compute tenant to free room for the
+        retry. Empty disables the check; fail-open (an unreachable/unparseable response never
+        triggers a kill). Requires `curl` + `jq` in the watcher image (`bitnami/kubectl` has both).
+      '';
+    };
+
+    brokerPriority = lib.mkOption {
+      type = lib.types.int;
+      default = 1000;
+      description = ''
+        Synthetic priority of the broker's model-load-starvation signal (default 1000 = the
+        interactive tier). Must exceed a best-effort tenant's priority for the watcher to evict it in
+        the broker's favor.
+      '';
+    };
+
     guardResources = lib.mkOption {
       type = lib.types.listOf lib.types.str;
       default = [ "devic.es/rocm-compute" "devic.es/vcn" ];
@@ -386,6 +432,8 @@ in
                     { name = "TICK"; value = toString cfg.tickSeconds; }
                     { name = "DESKTOP_PRIORITY"; value = toString cfg.desktopPriority; }
                     { name = "ENGINE_EXEMPT"; value = cfg.engineExemptValue; }
+                    { name = "BROKER_STATUS_URL"; value = cfg.brokerStatusUrl; }
+                    { name = "BROKER_PRIO"; value = toString cfg.brokerPriority; }
                     # Bounce the device plugin when these stick at 0 (registration zombie); empty = guard off.
                     { name = "GUARD_RESOURCES"; value = lib.concatStringsSep " " cfg.guardResources; }
                     { name = "GUARD_LABEL"; value = cfg.guardLabel; }
