@@ -98,6 +98,16 @@
         spec; most of them double as the public test suite once the landed
         modules are re-verified live.</p>
       </div>
+      <div class="step">
+        <div class="step-num">!</div>
+        <h3>Stress-tested under real contention</h3>
+        <p>The token cap and pressure-watcher were run today through
+        deliberately adversarial multi-tenant contention &mdash; an
+        oversubscribed card, chaos-fired concurrent tenants, and a real LLM
+        chat completion served under load &mdash; with zero card resets
+        throughout; this is the strongest evidence yet for the contract's core
+        claims, though it's same-day validation, not long-term soak.</p>
+      </div>
     </div>
   </div>
 </section>

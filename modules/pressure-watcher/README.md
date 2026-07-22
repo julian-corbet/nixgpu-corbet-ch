@@ -17,7 +17,7 @@ resolves this: the scheduler placed both pods long ago, and device plugins only
 count device files, not bytes. Someone has to watch the card and evict the right
 tenant. That someone is this module.
 
-## The three signals
+## The four signals
 
 1. **Starved pod.** A managed GPU pod stays not-Ready for `graceTicks` ticks
    while the card is above `hiWater` full. If a *lower*-priority managed pod is
@@ -45,6 +45,18 @@ tenant. That someone is this module.
    ticks while the plugin pod is Running, the plugin pod is bounced and
    capacity returns in seconds. A failed node query is never treated as zero
    (fail-closed). Empty `guardResources` disables the guard.
+4. **Broker starvation.** A shared multi-model server (e.g. a llama-swap-style
+   LLM broker) is itself one pod that stays Ready as long as the *server*
+   process is up — even while a specific model inside it is stuck failing to
+   load because the card has no room. Pod-readiness alone is blind to that:
+   this was found as a real production gap (a genuine chat request timing out
+   under contention, on hardware that served the identical request instantly
+   when idle) and closed by adding `brokerStatusUrl`. When set, the watcher
+   polls the broker's own status endpoint each tick; any model reported stuck
+   non-`ready` while the card is over `hiWater` is treated as a starved
+   tenant at `brokerPriority`, evicting the lowest-priority compute tenant
+   exactly like signal 1. A poll failure never fabricates starvation
+   (fail-open). Empty `brokerStatusUrl` disables the signal entirely.
 
 Design lessons baked into the script (from AntMan/Ray/oomd literature and
 production incidents): grace before acting, the trigger must outrank the victim,
@@ -117,12 +129,31 @@ script uses, replicated verbatim from the source system.
 
 ## Status & tuning honesty
 
-Extracted from a production system; this generalized form has not yet been
-re-verified live. The default thresholds (`hiWater = 0.85`,
-`gttDelta = 64 MiB`, `graceTicks = 2` at a 6 s tick) were tuned on a single
-16 GiB RDNA2 card. The GTT-spill thresholds in particular deserve one real
-gaming session on *your* hardware to tune: watch the log while a heavy title
-runs and adjust `gttDelta`/`graceTicks` until light titles never trigger and
-heavy ones shed exactly the lowest-priority pod.
+Extracted from a production system, and the generalized form has since been
+re-verified live on the real 16 GiB RDNA2 card: a formal contract-bench run
+(starvation eviction, multi-tenant chaos, co-residence) plus a deliberately
+adversarial hand-built stress test (a thundering herd oversubscribing the
+card, and the broker-blindness scenario below) both held `gpu_reset` at 0
+throughout. The broker-starvation signal (`brokerStatusUrl`) and the faster
+default `killCooldownTicks` (now 3 ticks / ~18 s, was a fixed 30 s/5-tick
+value baked into the script) exist *because* that stress test surfaced a real
+gap — a genuine chat completion through the production LLM broker errored
+under card contention, root-caused to the broker's pod staying Ready while
+one model silently failed to load — and the fix was verified end-to-end
+through the real request path, not just in isolation.
+
+This is confidence, not a "production-hardened" claim: every one of the
+verification runs above happened the same day the fixes shipped, under
+synthetic adversarial load, with zero multi-day organic soak yet. Idempotent
+batch durability under forced preemption (contract B13) has never actually
+been exercised by the bench — the run that targets it completed without a
+single resubmission occurring, so it's a SKIP, not a PASS, even though the
+watcher's eviction half and the idempotent-driver pattern are each
+independently sound. The GTT-spill thresholds (`gttDelta = 64 MiB`,
+`graceTicks = 2` at a 6 s tick, `hiWater = 0.85`) remain untuned against a
+real gaming/desktop session on *any* hardware — that item predates today's
+work and nothing today changed it. Watch the log while a heavy title runs and
+adjust `gttDelta`/`graceTicks` until light titles never trigger and heavy
+ones shed exactly the lowest-priority pod.
 
 Source lineage: generalized from a production single-GPU cluster.

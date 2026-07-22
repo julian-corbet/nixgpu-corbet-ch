@@ -146,13 +146,24 @@ win. (b) **Multi-model co-residency:** several small models that fit together
 are resident and served in parallel, not swapped. The generator co-resides
 what fits and falls back to swap-one-at-a-time (B5) only when it must.
 
-**B15 — MoE / partial offload: a model larger than VRAM is still servable.**
-"Fits the card" (B10) means fits *given its serving config*, not raw file
-size. A dense model needs its weights in VRAM; a Mixture-of-Experts model runs
-with experts in CPU RAM and only attention/shared layers + KV on the GPU. The
-generator detects MoE from GGUF metadata and emits an expert-offload config;
-the fit gate becomes *(GPU-resident footprint ≤ VRAM) AND (expert footprint ≤
-free RAM)*.
+**B15 — MoE / partial offload: a model larger than VRAM is still servable,
+decided at runtime, not at store-scan time.**
+"Fits the card" (B10) means fits *given what is actually free right now*, not
+a size verdict frozen at store-scan time. A dense model needs its full weights
+in VRAM — it is genuinely unservable, and skipped at store-scan time, only if
+it exceeds VRAM's total capacity. A Mixture-of-Experts model can run with
+experts in CPU RAM and only attention/shared layers + KV cache on the GPU —
+it is skipped at store-scan time only if it exceeds the RAM ceiling;
+otherwise it is served. Chat-mode models are launched with the serving
+engine's native runtime auto-fit turned on and **no** explicit offload flags
+(an explicit layer/expert-offload flag would disable fitting for that
+parameter, defeating the mechanism) — at every launch the engine reads live
+free VRAM and offloads exactly enough, experts first and then whole layers, to
+fit what is free *at that moment*, not what was free when the store was
+scanned. So the fit gate is live: a model that only just fit at scan time no
+longer hogs the whole card once other tenants have claimed some of it, and an
+oversized MoE that used to be forced fully onto the CPU can now land partially
+on GPU whenever room allows.
 
 > B4/B10/B14/B15 concern the shared LLM serving lane. The lane itself ships
 > as the sibling **nixllm** project; the behaviors stay in this contract

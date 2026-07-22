@@ -95,13 +95,82 @@ impossible on this hardware, unwired, or unnecessary. The honest move is to
 - **Shortening pod grace periods to "win the OOM race":** there is no card-crash
   race to win — OOM is graceful. Engineering fragile timing constants to chase a
   non-problem was proposed and rejected.
-- **A broker-starvation side-signal** (polling a multi-model server's
-  management API to detect "a model can't fit VRAM"): a real gap in principle —
-  a multi-model server's pod stays Ready even when one model can't load, so that
-  starvation is invisible to a readiness-based watcher — but low-impact today and
-  version-fragile to detect. Noted, deferred.
 - **Per-tenant VRAM quotas / declared budgets:** violates the measure-don't-
   declare principle; a single operator needs no fairness accounting.
+
+## 2026-07-22 — the reactive model, stress-tested
+
+The two open questions this doc left hanging — is graceful-OOM degradation
+actually true at real oversubscription, and is the "broker-starvation
+side-signal" really the low-impact, deferrable gap it was guessed to be — were
+both settled the same day, live on the 16 GiB RDNA2 card.
+
+**Graceful degradation, confirmed at deliberate oversubscription.** A hand-built
+stress test (separate from the formal contract-bench harness) raised the
+`rocm-compute` token cap to 16 — pure co-scheduling headroom, per the model
+above — and threw a thundering herd of 6 best-effort hogs at 3 GiB each, 18 GiB
+of demand against 16 GiB of card. Over 120 seconds, VRAM plateaued around
+15.1–15.2 GiB, the herd stayed at 6 Deployments the whole time, and at most 0–1
+pods were in a crash/OOM-retry loop at any sampled instant. Kernel fault
+counters — `page_fault`, `ring_timeout`, `gpu_reset` — stayed at 0 throughout. A
+higher-priority interactive pod arriving mid-saturation still got served, in
+15s, via the same watcher-scales-lowest-priority mechanism described above. This
+is direct empirical support for the doc's central claim: enforcement is
+unnecessary because the excess demand degrades by OOM-retry-loop, never by
+damaging the card.
+
+**Broker-blindness was real, not the low-impact gap this doc guessed.** The
+same stress session reproduced the operator's actual worst case: a real
+gemma-4-26b chat completion through the production LiteLLM door, sent while the
+card was saturated with best-effort hogs, errored after 37 seconds — against a
+3-second baseline on an empty card, proving the failure was contention-specific.
+Reading the broker's own logs and `/running` status API showed why: llama-server
+was repeatedly OOM-exiting trying to load the model, `/running` held
+`state=starting` for a sustained ~24s across six consecutive polls, and the
+watcher never saw any of it, because the broker's own pod — a multi-model
+server — stayed Ready throughout; one model failing to load doesn't make the
+pod not-Ready. That is exactly the gap this doc's "deliberately not done"
+section once described, except it was user-facing and reproducible on the
+platform's actual hardest scenario, not a theoretical, deferrable edge case.
+
+**The fix stayed inside the model: a starvation signal, no new machinery for
+enforcement.** `pressureWatcher` gained an opt-in `brokerStatusUrl` (polled each
+tick; fail-open on curl/jq failure so a probe outage never fabricates
+starvation) and a `brokerPriority` — a starved broker model is just another
+starved tenant to the existing eviction logic, same priority-ordered scale-to-
+zero as any other signal. That closed half the gap and was confirmed firing
+live, but a second re-test still failed (59s this time): the real blocker was
+that `gemma-4-26b` was generated to run fully on GPU (`-ngl 999`, no offload),
+because its on-disk size fit under a static threshold computed at store-scan
+time — even though at *runtime* the card had no room left, and freeing one
+tenant per watcher cooldown couldn't clear enough for a model that size before
+llama-swap's retry gave up.
+
+The actual resolution is the cleanest confirmation of this doc's "stand on
+FOSS, don't reinvent" stance available: llama.cpp already ships a runtime
+VRAM-fit mechanism (`--fit`, reading live free VRAM via `hipMemGetInfo` and
+offloading MoE experts and then layers to fit whatever's free *right now*,
+entirely inside llama.cpp) — and the platform's static `-ngl 999` generator flag
+was disabling it outright, because passing any explicit offload flag turns
+fitting off for that parameter. The fix was to stop fighting the tool: the
+generator now emits `--fit on --fit-target FIT_TARGET_MIB` for chat models
+instead of a static full-GPU-or-all-CPU choice, reusing the existing VRAM
+reserve constant as the fit headroom. Re-run end-to-end through the real
+LiteLLM door, with the card filled to ~13.5 GiB by five best-effort hogs and
+only ~2.5 GiB free: the model showed `starting` for 35s and reached `ready`
+by +40s, and the chat completion served successfully after 44 seconds total
+— `gpu_reset` stayed 0 throughout. Zero new components were added to close this gap: a
+starvation *signal* feeding the existing watcher, and turning back on a fitting
+feature the platform already had access to and was accidentally suppressing.
+
+Left honestly open: idempotent-batch durability under *forced* preemption
+(B13) has still never been exercised by the bench — the ledger's S9 scenario
+completed without a single resubmission occurring, so it is a SKIP, not a
+PASS, and the mechanism remains architecturally sound but unproven together
+under real preemption. Desktop GTT-spill thresholds (B9) remain untuned
+against a real session, unrelated to today's work. And all of the above is
+same-day verification under deliberately adversarial synthetic load — zero
+multi-day organic soak time exists yet for any of it.
 
 ## The through-line
 

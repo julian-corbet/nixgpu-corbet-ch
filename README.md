@@ -42,7 +42,10 @@ behavior spec they implement); the kernel module is still to come:
 
 - **`device-tokens`** — split one card into parallel scheduling lanes
   (`compute` + `vcn` media engine) via a generic device plugin; co-scheduling
-  with a small concurrency ceiling per lane.
+  with a small concurrency ceiling per lane. The ceiling is a blast-radius
+  tuning knob, not a VRAM budget — it has been run live at 2, 3, and 16 on the
+  same 16 GiB card, including a deliberate 18 GiB-of-demand stress test at
+  count=16 that degraded by OOM-retry-loop rather than a card reset.
 - **`priority-ladder`** — the PriorityClass set (`desktop` > `interactive` >
   `besteffort`) that defines who yields first. Priority is set by intent, not
   hardwired to an app.
@@ -68,6 +71,25 @@ guarding, and fronting real tenants today (even the tenant label domain runs
 on this repo's `nixgpu.corbet.ch/*` defaults). Each module directory
 documents its options (`nixidyModules.*`). [CONTRACT.md](CONTRACT.md) is the
 behavior contract the platform is built and tested against.
+
+The token cap is proven across a real range on that card, not just at one
+setting: raised live from 2 to 3 to 16, with a deliberate thundering-herd
+stress test at 16 (six best-effort tenants demanding 18 GiB on a 16 GiB card)
+holding `gpu_reset` at 0 throughout — the excess demand degrades by
+OOM-retry-loop, never a reset. A real broker-blindness gap under contention
+(a multi-model LLM server whose pod stayed Ready while a specific model
+starved for VRAM) was also found and closed the same day, end to end through
+the production request path, and is what motivated `pressure-watcher`'s
+`brokerStatusUrl` and `killCooldownTicks` options below.
+
+None of this is a claim of "production-hardened" or "no known issues": every
+fix above shipped and was verified today, under deliberately adversarial
+synthetic load, with zero multi-day organic soak time yet. Idempotent-batch
+durability under forced preemption (contract B13) remains architecturally
+sound but unexercised by the bench (a SKIP, not a PASS), and desktop
+GTT-spill thresholds (B9) are still untuned against a real gaming session —
+see the [`pressure-watcher` README](modules/pressure-watcher/README.md) for
+both.
 
 ## Requirements (deliberate, not negotiable)
 

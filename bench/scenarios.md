@@ -46,6 +46,16 @@ Every scenario:
 **Fails if:** any tenant never becomes Ready, any Deployment's replica count
 reads 0 at the end, or any counter changed.
 
+**Free-token pre-check:** before rendering any tenant, S1 checks how many
+`devic.es/rocm-compute` tokens are actually free right now. At a low cap
+(e.g. cap=3), a live comfyui TTL-warm tenant plus the broker can already be
+occupying every token on their own — that is **co-residence working
+correctly**, not a bug, and S1 has nothing left to prove in that state. When
+the pre-check finds 0 (or too few) free tokens it records a **SKIP** with a
+reason such as `only 0 free devic.es/rocm-compute token(s)... rerun when the
+card's lanes allow`, rather than rendering hogs that cannot schedule and
+failing blind on an unrelated scheduling error.
+
 ---
 
 ## S2 — contention (CONTRACT.md B2 / B11 / B12)
@@ -329,24 +339,50 @@ killed proves nothing about B13 (raise `S9_FORCE_HOG_MARGIN_GIB` or
 **Fails if:** the deadline elapses with any item still missing from the
 ledger.
 
+**Observed in practice:** on the one real run to date, the force-hog sizing
+logic itself worked correctly against live telemetry (logged as
+`sizing force-hog from telemetry: total=17163091968 used=8605265920 -> 10.0
+GiB (margin 2 GiB)`), and the ledger completed with all items recorded — but
+zero resubmissions were observed, so the run recorded SKIP, not PASS. B13 (an
+idempotent batch actually surviving a real preemption) has not yet been
+exercised end-to-end by this bench; the sizing and the ledger mechanics are
+proven, the preemption-and-resubmit path is not.
+
 ---
 
 ## S10 — oversized MoE model (CONTRACT.md B15)
 
 **Subcommand:** `run-bench.sh s10`
 
-**Prerequisite:** `$MODEL_MOE` names a Mixture-of-Experts model whose dense
-GPU-resident footprint under expert offload fits VRAM, but whose *total*
-weight size does not.
+**Prerequisite:** `$MODEL_MOE` names a Mixture-of-Experts model whose total
+weight size does not fit VRAM, but which is within the store-scan's RAM
+ceiling (`RAM_CEILING_PERCENT`) — the skip gate for a model this shape is
+unchanged: a *dense* model bigger than VRAM is still skipped outright (dense
+layers have no expert structure to shed), but a MoE model in this situation
+is served, not skipped.
+
+**What changed:** the generator no longer forces a served oversized MoE onto
+a static `--cpu-moe` (all experts on CPU, regardless of how much VRAM is
+actually free at runtime). Chat-mode models are now launched with
+llama.cpp's native `--fit on --fit-target ... -c ...`, which reads live free
+VRAM at launch and offloads exactly enough (MoE experts first, then whole
+layers) to fit what's free right now — done natively inside llama.cpp, with
+real per-tensor and KV-cache accounting, not by an external script deciding
+GPU-vs-CPU ahead of time. Passing any explicit `-ngl`/`--cpu-moe`/`-ot`
+disables fitting for that parameter, which is exactly what the previous
+static generator did; this scenario exists to confirm the model still serves
+now that it doesn't.
 
 **Procedure:**
 1. Snapshot kernel counters.
 2. Send one completion request to `$MODEL_MOE`.
 3. Snapshot kernel counters again.
 
-**Pass criteria:** the request returns HTTP 200 (served via CPU expert
-offload, per B15's fit gate — GPU-resident footprint ≤ VRAM AND expert
-footprint ≤ free RAM), and kernel counters are unchanged (no card reset from
+**Pass criteria:** the request returns HTTP 200 — a served completion is the
+signal, not any particular flag or offload split, because `--fit` decides
+that split at runtime rather than at store-scan time and the exact GPU/CPU
+mix is legitimately allowed to vary run to run with whatever else is
+resident on the card. Kernel counters must be unchanged (no card reset from
 an oversized load attempt).
 
 **Fails if:** the request fails, or any kernel counter changed.
