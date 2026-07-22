@@ -1,0 +1,103 @@
+# vcn-transcoder — the persistent media-engine tenant for the bench (S6 / B3).
+#
+# A Deployment that VAAPI-transcodes a synthetic test pattern in an endless
+# loop and prints ffmpeg's `-progress` stream, so the bench can assert two
+# things throughout an entire run: zero container restarts, and frame
+# progress that never stalls longer than a threshold. It is started BEFORE
+# every other scenario and stopped AFTER — CONTRACT.md B3 says compute VRAM
+# pressure must never touch it, so it is the one tenant that is expected to
+# survive, untouched, everything S1-S11 throw at the card.
+#
+# No test asset is required: the source is `lavfi testsrc`, a synthetically
+# generated pattern, so this template has no dependency on sample media
+# being present anywhere.
+#
+# Rendered with `envsubst`, restricted to exactly the variable list below:
+#
+#   envsubst '$NAMESPACE $VCN_NAME $VCN_IMAGE $VAAPI_RENDER_NODE $DEVICE_TOKEN_VCN $ENGINE_LABEL_KEY $ENGINE_VCN_VALUE $MANAGED_LABEL_KEY' \
+#     < tenants/vcn-transcoder.yaml > rendered.yaml
+#
+# Restricting the list matters here specifically: the container command is a
+# shell loop that itself uses `$(date ...)` — a bare `envsubst` would try to
+# expand that too (and silently produce garbage, since $date is not an env
+# var). Passing the explicit variable list leaves everything else in the
+# file untouched.
+#
+# Variables:
+#   NAMESPACE            bench namespace (bench.env: NAMESPACE)
+#   VCN_NAME              unique Deployment name
+#   VCN_IMAGE              image with ffmpeg built with VAAPI support
+#                          (bench.env: VCN_IMAGE)
+#   VAAPI_RENDER_NODE      DRI render node path, e.g. /dev/dri/renderD128
+#                          (bench.env: VAAPI_RENDER_NODE) — bind-mounted in
+#                          automatically by device-tokens' vcn lane; this is
+#                          only the in-container path ffmpeg opens
+#   DEVICE_TOKEN_VCN       the device-tokens media-engine lane extended
+#                          resource (bench.env: DEVICE_TOKEN_VCN, default
+#                          devic.es/vcn)
+#   ENGINE_LABEL_KEY       pressure-watcher's engine label key
+#                          (bench.env: ENGINE_LABEL_KEY, default
+#                          nixgpu.corbet.ch/engine)
+#   ENGINE_VCN_VALUE       the engine-label value that exempts a tenant from
+#                          all compute-pressure decisions (bench.env:
+#                          ENGINE_VCN_VALUE, default "vcn")
+#   MANAGED_LABEL_KEY      the pressure-watcher's tenant label key — the
+#                          transcoder still carries it (it is a managed GPU
+#                          tenant the watcher can SEE), the engine label is
+#                          what makes it exempt, not the absence of the
+#                          managed label
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ${VCN_NAME}
+  namespace: ${NAMESPACE}
+  labels:
+    app: ${VCN_NAME}
+    bench.nixgpu.corbet.ch/run: "true"
+    bench.nixgpu.corbet.ch/kind: vcn-transcoder
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: ${VCN_NAME}
+  template:
+    metadata:
+      labels:
+        app: ${VCN_NAME}
+        ${MANAGED_LABEL_KEY}: "true"
+        ${ENGINE_LABEL_KEY}: "${ENGINE_VCN_VALUE}"
+        bench.nixgpu.corbet.ch/run: "true"
+        bench.nixgpu.corbet.ch/kind: vcn-transcoder
+    spec:
+      restartPolicy: Always
+      containers:
+        - name: transcoder
+          image: ${VCN_IMAGE}
+          command: ["sh", "-c"]
+          args:
+            - |
+              set -eu
+              echo "vcn-transcoder up: $(date -u +%FT%TZ)"
+              i=0
+              while true; do
+                i=$((i + 1))
+                echo "TRANSCODE LOOP START iter=$i $(date -u +%FT%TZ)"
+                ffmpeg -y -loglevel error \
+                  -vaapi_device ${VAAPI_RENDER_NODE} \
+                  -f lavfi -i "testsrc=size=1280x720:rate=30" -t 30 \
+                  -vf 'format=nv12,hwupload' -c:v h264_vaapi \
+                  -progress pipe:1 \
+                  -f mp4 /tmp/out.mp4
+                echo "TRANSCODE LOOP DONE iter=$i $(date -u +%FT%TZ)"
+              done
+          # No readiness/liveness probe beyond "container is running": the
+          # bench itself watches restartCount and the `-progress` log
+          # cadence (see run-bench.sh's vcn_health_check), because those are
+          # exactly the two invariants B3/S6 claims.
+          resources:
+            requests:
+              ${DEVICE_TOKEN_VCN}: "1"
+            limits:
+              ${DEVICE_TOKEN_VCN}: "1"

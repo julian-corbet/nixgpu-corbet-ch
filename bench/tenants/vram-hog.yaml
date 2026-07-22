@@ -1,0 +1,110 @@
+# vram-hog — a synthetic compute tenant for the bench.
+#
+# A Deployment that allocates a fixed amount of VRAM on the device-tokens
+# `compute` lane and then sleeps forever, printing a READY marker once the
+# allocation has actually landed (not just once the process has started).
+# Used by S1 (co-residence: several small hogs that fit together), S2
+# (contention: one hog sized to fill the card so an interactive-priority
+# tenant cannot fit), and indirectly by S5/S9 as the "lowest-priority
+# occupant" pressure-watcher is expected to evict.
+#
+# Rendered with `envsubst`, restricted to exactly the variable list below —
+# run-bench.sh does:
+#
+#   envsubst '$NAMESPACE $HOG_NAME $HOG_IMAGE $HOG_SIZE_GIB $PRIORITY_CLASS_NAME $MANAGED_LABEL_KEY $DEVICE_TOKEN_COMPUTE' \
+#     < tenants/vram-hog.yaml > rendered.yaml
+#
+# Restricting the substitution list (rather than a bare `envsubst`) means
+# only these seven names are ever touched; nothing else in this file (or in
+# the Python one-liner below, which has no `$` in it anyway) can be
+# accidentally rewritten.
+#
+# Variables:
+#   NAMESPACE            bench namespace (bench.env: NAMESPACE)
+#   HOG_NAME              unique Deployment name for this hog instance
+#                          (a scenario may render this template more than
+#                          once, with different names/sizes, in one run)
+#   HOG_IMAGE              image with python3 + a ROCm-enabled torch build
+#                          (bench.env: HOG_IMAGE)
+#   HOG_SIZE_GIB           how many GiB to pin (float, e.g. "6" or "6.5")
+#   PRIORITY_CLASS_NAME    one of the priority-ladder classes, e.g.
+#                          gpu-besteffort / gpu-interactive
+#   MANAGED_LABEL_KEY      the pressure-watcher's tenant label key
+#                          (bench.env: MANAGED_LABEL_KEY, default
+#                          nixgpu.corbet.ch/managed)
+#   DEVICE_TOKEN_COMPUTE   the device-tokens compute lane extended resource
+#                          (bench.env: DEVICE_TOKEN_COMPUTE, default
+#                          devic.es/rocm-compute)
+#
+# The `bench.nixgpu.corbet.ch/run: "true"` label is deliberately NOT a
+# variable: run-bench.sh's cleanup trap selects on this constant, in
+# $NAMESPACE only, regardless of anything in bench.env — so a half-aborted
+# run can always be swept even if the config that created it is gone or
+# changed.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ${HOG_NAME}
+  namespace: ${NAMESPACE}
+  labels:
+    app: ${HOG_NAME}
+    bench.nixgpu.corbet.ch/run: "true"
+    bench.nixgpu.corbet.ch/kind: vram-hog
+spec:
+  replicas: 1
+  # Recreate, not RollingUpdate: on a card with no spare headroom a rolling
+  # update briefly wants two pods scheduled at once, which either fails to
+  # schedule or fights the old pod for the device (same reasoning as
+  # ondemand-front's README for GPU-backed 0<->1 Deployments).
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: ${HOG_NAME}
+  template:
+    metadata:
+      labels:
+        app: ${HOG_NAME}
+        ${MANAGED_LABEL_KEY}: "true"
+        bench.nixgpu.corbet.ch/run: "true"
+        bench.nixgpu.corbet.ch/kind: vram-hog
+    spec:
+      priorityClassName: ${PRIORITY_CLASS_NAME}
+      restartPolicy: Always
+      containers:
+        - name: hog
+          image: ${HOG_IMAGE}
+          env:
+            - name: ALLOC_GIB
+              value: "${HOG_SIZE_GIB}"
+          command: ["python3", "-c"]
+          args:
+            - |
+              import os, time
+              import torch
+
+              gib = float(os.environ["ALLOC_GIB"])
+              # ROCm builds of torch expose the same "cuda" device API.
+              dev = torch.device("cuda")
+              elems = int(gib * (1024 ** 3) / 4)  # float32 = 4 bytes/elem
+              t = torch.empty(elems, dtype=torch.float32, device=dev)
+              t.fill_(1.0)
+              torch.cuda.synchronize()
+
+              with open("/tmp/ready", "w") as f:
+                  f.write("ready\n")
+              print("HOG READY gib=%s" % gib, flush=True)
+
+              while True:
+                  time.sleep(3600)
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "test -f /tmp/ready"]
+            initialDelaySeconds: 1
+            periodSeconds: 2
+            failureThreshold: 300 # allocation itself may legitimately take a while under contention
+          resources:
+            requests:
+              ${DEVICE_TOKEN_COMPUTE}: "1"
+            limits:
+              ${DEVICE_TOKEN_COMPUTE}: "1"
