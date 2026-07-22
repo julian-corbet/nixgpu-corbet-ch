@@ -22,6 +22,8 @@
 #
 # Variables:
 #   NAMESPACE            bench namespace (bench.env: NAMESPACE)
+#   HSA_GFX_VERSION      ROCm arch override for the torch allocator
+#                          (bench.env: HSA_GFX_VERSION, e.g. "10.3.0")
 #   HOG_NAME              unique Deployment name for this hog instance
 #                          (a scenario may render this template more than
 #                          once, with different names/sizes, in one run)
@@ -78,6 +80,11 @@ spec:
           env:
             - name: ALLOC_GIB
               value: "${HOG_SIZE_GIB}"
+          env:
+            # ROCm needs the arch override on cards whose exact ISA isn't in the
+            # runtime's support list (the reference RDNA2 card uses "10.3.0").
+            # Set HSA_GFX_VERSION to whatever your other GPU pods use.
+            - { name: HSA_OVERRIDE_GFX_VERSION, value: "${HSA_GFX_VERSION}" }
           command: ["python3", "-c"]
           args:
             - |

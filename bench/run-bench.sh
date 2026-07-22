@@ -99,12 +99,15 @@ CLEANUP_DONE=0
 cleanup_bench_objects() {
   [ "$CLEANUP_DONE" = 1 ] && return
   CLEANUP_DONE=1
-  log "cleanup: sweeping every object labeled bench.nixgpu.corbet.ch/run=true in namespace $NAMESPACE"
+  log "cleanup: sweeping bench objects (run=true, persistent!=true) in namespace $NAMESPACE"
   # Deployments, Pods, ConfigMaps — everything a scenario in this script
   # creates carries this constant label; nothing else in $NAMESPACE is
   # touched, and no other namespace is ever addressed here.
+  # persistent!=true: the S6 transcoder is created by its own s6-start
+  # INVOCATION and must outlive that invocation's exit sweep — only s6-stop
+  # (or an explicit by-name delete) removes it.
   kx -n "$NAMESPACE" delete deployment,pod,configmap,job \
-    -l 'bench.nixgpu.corbet.ch/run=true' --ignore-not-found=true --wait=false >/dev/null 2>&1 || true
+    -l 'bench.nixgpu.corbet.ch/run=true,bench.nixgpu.corbet.ch/persistent!=true' --ignore-not-found=true --wait=false >/dev/null 2>&1 || true
   [ -n "${RENDER_TMP_DIR:-}" ] && rm -rf "$RENDER_TMP_DIR"
 }
 # EXIT handles every normal path. INT/TERM must sweep AND terminate: a bare
@@ -294,7 +297,7 @@ render_hog() {
   local rendered
   rendered="$(render_tenant "$SELF_DIR/tenants/vram-hog.yaml" "hog-render-$$-$RANDOM.yaml" \
     NAMESPACE HOG_NAME="$name" HOG_IMAGE HOG_SIZE_GIB="$gib" \
-    PRIORITY_CLASS_NAME="$prio" MANAGED_LABEL_KEY DEVICE_TOKEN_COMPUTE)"
+    PRIORITY_CLASS_NAME="$prio" MANAGED_LABEL_KEY DEVICE_TOKEN_COMPUTE HSA_GFX_VERSION)"
   cp "$rendered" "$out"
 }
 
