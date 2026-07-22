@@ -118,6 +118,9 @@ cleanup_bench_objects() {
 # with the conventional 128+SIGNAL code.
 trap cleanup_bench_objects EXIT
 trap 'cleanup_bench_objects; trap - EXIT; exit 130' INT
+# HUP: an ssh-session death mid-run must sweep too (a killed client strands
+# tenants otherwise — observed live 2026-07-22).
+trap 'cleanup_bench_objects; trap - EXIT; exit 129' HUP
 trap 'cleanup_bench_objects; trap - EXIT; exit 143' TERM
 
 # ---------------------------------------------------------------------------

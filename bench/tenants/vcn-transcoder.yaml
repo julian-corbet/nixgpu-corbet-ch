@@ -55,7 +55,6 @@ metadata:
   labels:
     app: ${VCN_NAME}
     bench.nixgpu.corbet.ch/run: "true"
-        bench.nixgpu.corbet.ch/persistent: "true"
     bench.nixgpu.corbet.ch/persistent: "true"
     bench.nixgpu.corbet.ch/kind: vcn-transcoder
 spec:
@@ -69,6 +68,8 @@ spec:
     metadata:
       labels:
         app: ${VCN_NAME}
+        bench.nixgpu.corbet.ch/run: "true"
+        bench.nixgpu.corbet.ch/persistent: "true"
         ${MANAGED_LABEL_KEY}: "true"
         ${ENGINE_LABEL_KEY}: "${ENGINE_VCN_VALUE}"
         bench.nixgpu.corbet.ch/run: "true"
