@@ -61,6 +61,8 @@ let
     GUARD_GRACE="''${GUARD_GRACE:-5}"            # ticks a resource must read 0 before the bounce (anti-flap; a plugin rollout re-registers in seconds)
     BROKER_STATUS_URL="''${BROKER_STATUS_URL:-}"  # optional: a shared multi-model LLM server's status endpoint (e.g. llama-swap /running). Empty = off.
     BROKER_PRIO="''${BROKER_PRIO:-1000}"          # priority of the broker's model-load-starvation signal (default = interactive tier)
+    KILL_COOLDOWN="''${KILL_COOLDOWN:-3}"         # ticks to wait after a kill for reclaimed VRAM to land before re-deciding. Lower = faster
+                                                  # multi-evict convergence when ONE eviction isn't enough (a big model needing several lanes freed)
     declare -A starve
 
     log(){ echo "$(date -u +%H:%M:%S)Z $*"; }
@@ -160,8 +162,8 @@ let
           log "VRAM ''${pct}% + $hi_pod (prio $hi_prio) STARVED → delete lowest-pri pod $lo_ns/$lo_pod (prio $lo_prio)"
           kubectl -n "$lo_ns" delete pod "$lo_pod" --grace-period=5 >/dev/null 2>&1
         fi
-        unset starve; declare -A starve           # reset grace counters after acting
-        cd=5                                       # ~30s at the default 6s tick: let the reclaimed VRAM land before deciding again
+        unset starve; declare -A starve           # reset grace counters after acting (anti-over-evict: re-observe from scratch after the freed VRAM lands)
+        cd=$KILL_COOLDOWN                          # wait for the reclaimed VRAM to land before deciding again (default 3 ≈ 18s at a 6s tick; was a fixed 30s)
       fi
 
       # Registration guard (a real production incident): after a node/runtime crash the device plugin
@@ -289,6 +291,17 @@ in
       type = lib.types.int;
       default = 2;
       description = "Ticks a tenant must stay starved/spilling before it justifies a kill (anti-flap).";
+    };
+
+    killCooldownTicks = lib.mkOption {
+      type = lib.types.int;
+      default = 3;
+      description = ''
+        Ticks to wait after a kill for the reclaimed (pinned) VRAM to actually land before the watcher
+        re-decides. Must cover a pod's terminate-and-free time (~one grace period); lower values make
+        multi-eviction converge faster when a single eviction does not free enough VRAM (e.g. a large
+        model that needs several lanes freed at once). Default 3 (~18s at the 6s tick).
+      '';
     };
 
     gttDelta = lib.mkOption {
@@ -428,6 +441,7 @@ in
                     { name = "NODE_NAME"; valueFrom.fieldRef.fieldPath = "spec.nodeName"; }
                     { name = "HI_WATER"; value = cfg.hiWater; }
                     { name = "GRACE_TICKS"; value = toString cfg.graceTicks; }
+                    { name = "KILL_COOLDOWN"; value = toString cfg.killCooldownTicks; }
                     { name = "GTT_DELTA"; value = toString cfg.gttDelta; }
                     { name = "TICK"; value = toString cfg.tickSeconds; }
                     { name = "DESKTOP_PRIORITY"; value = toString cfg.desktopPriority; }

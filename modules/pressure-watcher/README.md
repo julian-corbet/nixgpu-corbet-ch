@@ -82,6 +82,7 @@ the field as empty and silently break engine discovery.
 | `engineExemptValue` | str | `"vcn"` | Engine-label value marking media-engine tenants that are never compute victims or triggers. |
 | `hiWater` | strMatching `[0-9]*\.?[0-9]+` | `"0.85"` | VRAM-full gate, fraction of total (numeric string; non-numeric values fail at eval). Pressure is only "real" above this. |
 | `graceTicks` | int | `2` | Ticks a tenant must stay starved/spilling before a kill (anti-flap). |
+| `killCooldownTicks` | int | `3` | Ticks to wait after a kill for reclaimed VRAM to land before re-deciding (~18s). Lower = faster multi-eviction convergence for a large model needing several lanes freed. |
 | `gttDelta` | int | `67108864` | GTT growth per tick (bytes) treated as noise (64 MiB). A noise floor, not a budget. |
 | `tickSeconds` | int | `6` | Seconds per tick. Cooldowns are counted in ticks. |
 | `desktopPriority` | int | `2000000` | Synthetic desktop priority; must outrank every PriorityClass. |
