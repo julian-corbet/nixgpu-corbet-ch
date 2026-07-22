@@ -173,3 +173,22 @@ The originating system proved the contract with **four models contending for
 16 GiB** — a RAG stack (embedder + reranker + large chat model) plus an image
 generator — under real desktop use. A platform that satisfies B1–B10 under
 that load generalizes to every tenant added later.
+
+## Arbitration model (how these behaviors are actually enforced)
+
+Two behaviors above (B2 eviction, B8 measured-VRAM) are enforced by a **single
+reactive arbiter**, and it is worth stating the layering plainly, because it is
+easy to assume Kubernetes priority preemption does the work — it does not.
+
+- The compute **token count is a co-scheduling / blast-radius cap, not a VRAM
+  budget.** It bounds how many GPU pods co-schedule; it does not decide who
+  fits.
+- **Priority preemption is inert** for these device-plugin extended-resource
+  tokens (measured live). It arbitrates nothing.
+- The **reactive pressure-watcher is the sole active arbiter**, deciding by
+  *measured* VRAM (B8) and reclaiming by scaling the lowest-priority tenant to
+  zero (B2). A clean VRAM OOM is graceful (a retried request, not a card reset),
+  so this reactive model's worst case is a retry — which is why admission stays
+  reactive rather than VRAM-aware-enforced. Full rationale, and the survey of
+  why datacenter admission machinery does not apply to a single consumer card:
+  [studies/arbitration-model.md](studies/arbitration-model.md).
