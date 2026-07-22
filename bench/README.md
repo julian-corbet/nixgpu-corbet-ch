@@ -57,7 +57,7 @@ This bench is not a toy that runs anywhere — it is only meaningful against:
   additionally needs that namespace's ServiceAccount to be able to
   `get`/`patch` ConfigMaps in the same namespace (its item pods write their
   own completion ledger) — see `scenarios.md`'s S9 section.
-- **`bash`, `kubectl`, `curl`, `jq`, `envsubst`** on whatever machine runs
+- **`bash`, `kubectl`, `curl`, `jq`** on whatever machine runs
   `run-bench.sh` — nothing else. No Python, no extra packages. (A rendered
   *tenant's own container* may run Python — see `tenants/vram-hog.yaml` — that
   is a dependency of the tenant image, not of the driver.)
@@ -109,7 +109,7 @@ Nothing about `run-bench.sh` assumes it runs on an operator's laptop — it is
 equally at home as a one-shot Kubernetes `Job` in the target cluster,
 carrying a ServiceAccount with the RBAC described above, `bench.env` mounted
 as a ConfigMap/Secret, and this directory baked into (or mounted onto) an
-image with `bash`+`kubectl`+`curl`+`jq`+`envsubst` (the same
+image with `bash`+`kubectl`+`curl`+`jq` (the same
 `bitnami/kubectl`-class image the `pressure-watcher` module already uses
 covers everything except which ships in `gettext-base`/`gettext`
 on most base images — check yours). Running it from any kubectl-bearing
