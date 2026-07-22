@@ -515,6 +515,25 @@ completion_request() {
 # S1 (B1) — co-residence: three tenants at mixed priorities that fit together.
 s1_coresidence() {
   local id; id="$(scenario_id S1)"
+  # Free-token pre-check: co-residence hogs need a free compute token EACH,
+  # and on a real platform the standing tenants (the shared LLM broker always;
+  # a woken scale-to-zero app during its TTL) may hold every lane. That is not
+  # a platform failure — it IS co-residence. Skip with the reason instead of
+  # failing blind on Pending pods.
+  local want=0
+  for i in 0 1 2; do
+    case "$i" in 0) sz="$S1_TENANT_A_GIB";; 1) sz="$S1_TENANT_B_GIB";; 2) sz="${S1_TENANT_C_GIB:-}";; esac
+    [ -n "$sz" ] && [ "$sz" != "0" ] && want=$((want+1))
+  done
+  local alloc used free
+  alloc="$(kx get nodes -o json | jq -r "[.items[].status.allocatable[\"$DEVICE_TOKEN_COMPUTE\"] // \"0\" | tonumber] | add")"
+  used="$(kx get pods -A -o json | jq -r "[.items[] | select(.status.phase == \"Running\" or .status.phase == \"Pending\") | select(.metadata.namespace != \"$NAMESPACE\") | .spec.containers[].resources.requests[\"$DEVICE_TOKEN_COMPUTE\"] // \"0\" | tonumber] | add")"
+  free=$((alloc - used))
+  if [ "$free" -lt "$want" ]; then
+    record_result S1 SKIP "only $free free $DEVICE_TOKEN_COMPUTE token(s) (real tenants hold the rest) — need $want; rerun when the card's lanes allow"
+    return 0
+  fi
+
   local c0; c0="$(t_counters)"
   local names=("bench-s1-a$BENCH_SUFFIX" "bench-s1-b$BENCH_SUFFIX" "bench-s1-c$BENCH_SUFFIX")
   # The third tenant is OPTIONAL (empty/0 GiB = skipped): on a platform whose
