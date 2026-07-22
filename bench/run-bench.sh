@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # run-bench.sh — the nixgpu CONTRACT.md bench driver.
 #
-# bash + kubectl + curl + jq + envsubst only. No python on the driver side
+# bash + kubectl + curl + jq only. No python on the driver side
 # (a rendered tenant's OWN container may run python — see tenants/vram-hog.yaml
 # — that is a world away from the driver depending on it).
 #
@@ -41,7 +41,7 @@ log() { echo "[$(date -u +%H:%M:%S)Z] $*"; }
 warn() { echo "[$(date -u +%H:%M:%S)Z] WARN: $*" >&2; }
 
 need_cmd() { command -v "$1" >/dev/null 2>&1 || die "required command '$1' not found on PATH"; }
-for c in kubectl curl jq envsubst awk date mktemp; do need_cmd "$c"; done
+for c in kubectl curl jq awk date mktemp; do need_cmd "$c"; done
 
 [ -f "$ENV_FILE" ] || die "config not found: $ENV_FILE (copy bench.env.example -> bench.env and fill it in, or set BENCH_ENV=/path/to/file)"
 set -a
@@ -246,11 +246,11 @@ inversion_now() {
 RENDER_TMP_DIR="$(mktemp -d)"
 
 # render_tenant <template_path> <out_name> <VAR|VAR=VALUE ...>
-# Restricts envsubst to exactly the named vars, as documented at the top of
+# Restricts substitution to exactly the named vars, as documented at the top of
 # each template — anything else with a literal '$' in the template (shell
 # loops, python) is left untouched.
 #
-# Every variable is passed to envsubst via an explicit `env` command prefix,
+# Every variable is passed explicitly per call,
 # NEVER via inherited export state: script-level globals like VCN_NAME are
 # not exported (bench.env's `set -a` window closed long before they were
 # assigned), so relying on the environment silently renders empty strings
@@ -258,13 +258,27 @@ RENDER_TMP_DIR="$(mktemp -d)"
 # that variable; VAR=VALUE overrides it for this render only.
 render_tenant() {
   local template="$1" out="$RENDER_TMP_DIR/$2"; shift 2
-  local varlist="" envargs=() v name val
+  local v name val
+  declare -A vmap=()
   for v in "$@"; do
     if [[ "$v" == *=* ]]; then name="${v%%=*}"; val="${v#*=}"; else name="$v"; val="${!name-}"; fi
-    varlist="$varlist \$$name"
-    envargs+=("$name=$val")
+    vmap["$name"]="$val"
   done
-  env "${envargs[@]}" envsubst "$varlist" < "$template" > "$out"
+  # Pure-bash whitelist substitution (envsubst-compatible): only the named
+  # vars are replaced, in both ${NAME} and $NAME forms — bare-$ names longest-
+  # first so a short name never eats a longer name's prefix. Everything else
+  # with a literal '$' (the templates' inner shell/python) is left untouched.
+  local content name2
+  content="$(cat "$template")"
+  for v in "$@"; do
+    name2="${v%%=*}"
+    content="${content//"\${${name2}}"/${vmap[$name2]}}"
+  done
+  while IFS= read -r name2; do
+    [ -n "$name2" ] || continue
+    content="${content//"\$${name2}"/${vmap[$name2]}}"
+  done < <(for v in "$@"; do printf '%s\n' "${v%%=*}"; done | awk '{print length, $0}' | sort -rn | cut -d" " -f2-)
+  printf '%s\n' "$content" > "$out"
   echo "$out"
 }
 
@@ -274,14 +288,14 @@ delete_tenant_by_name() { kx -n "$NAMESPACE" delete "$1" "$2" --ignore-not-found
 # render_hog <out_path> <deployment_name> <size_gib> <priority_class>
 # The one place vram-hog.yaml is rendered; every scenario below that needs a
 # synthetic compute tenant goes through this instead of hand-rolling its own
-# envsubst call. Same explicit-env rule as render_tenant.
+# render call. Same explicit-variable rule as render_tenant.
 render_hog() {
   local out="$1" name="$2" gib="$3" prio="$4"
-  env NAMESPACE="$NAMESPACE" HOG_NAME="$name" HOG_IMAGE="$HOG_IMAGE" HOG_SIZE_GIB="$gib" \
-      PRIORITY_CLASS_NAME="$prio" MANAGED_LABEL_KEY="$MANAGED_LABEL_KEY" \
-      DEVICE_TOKEN_COMPUTE="$DEVICE_TOKEN_COMPUTE" \
-    envsubst '$NAMESPACE $HOG_NAME $HOG_IMAGE $HOG_SIZE_GIB $PRIORITY_CLASS_NAME $MANAGED_LABEL_KEY $DEVICE_TOKEN_COMPUTE' \
-    < "$SELF_DIR/tenants/vram-hog.yaml" > "$out"
+  local rendered
+  rendered="$(render_tenant "$SELF_DIR/tenants/vram-hog.yaml" "hog-render-$$-$RANDOM.yaml" \
+    NAMESPACE HOG_NAME="$name" HOG_IMAGE HOG_SIZE_GIB="$gib" \
+    PRIORITY_CLASS_NAME="$prio" MANAGED_LABEL_KEY DEVICE_TOKEN_COMPUTE)"
+  cp "$rendered" "$out"
 }
 
 # wait_ready <deployment_name> <timeout_s>
@@ -497,23 +511,28 @@ s1_coresidence() {
   local id; id="$(scenario_id S1)"
   local c0; c0="$(t_counters)"
   local names=("bench-s1-a$BENCH_SUFFIX" "bench-s1-b$BENCH_SUFFIX" "bench-s1-c$BENCH_SUFFIX")
-  local sizes=("$S1_TENANT_A_GIB" "$S1_TENANT_B_GIB" "$S1_TENANT_C_GIB")
-  local prios=("$S1_TENANT_A_PRIORITY" "$S1_TENANT_B_PRIORITY" "$S1_TENANT_C_PRIORITY")
-  local i out
+  # The third tenant is OPTIONAL (empty/0 GiB = skipped): on a platform whose
+  # device plugin advertises only two compute tokens (the reference
+  # deployment), the contract's third co-resident is the DESKTOP — not a pod.
+  local sizes=("$S1_TENANT_A_GIB" "$S1_TENANT_B_GIB" "${S1_TENANT_C_GIB:-}")
+  local prios=("$S1_TENANT_A_PRIORITY" "$S1_TENANT_B_PRIORITY" "${S1_TENANT_C_PRIORITY:-}")
+  local i out applied=()
   for i in 0 1 2; do
+    [ -n "${sizes[$i]}" ] && [ "${sizes[$i]}" != "0" ] || continue
     out="$RENDER_TMP_DIR/s1$BENCH_SUFFIX-$i.yaml"
     render_hog "$out" "${names[$i]}" "${sizes[$i]}" "${prios[$i]}"
     apply_tenant "$out"
+    applied+=("${names[$i]}")
   done
 
   local ok=1 name
-  for name in "${names[@]}"; do
+  for name in "${applied[@]}"; do
     wait_ready "$name" "$COLD_WAKE_BUDGET_S" || { ok=0; warn "S1: $name never became Ready"; }
   done
 
   local c1; c1="$(t_counters)"
   local evictions=0
-  for name in "${names[@]}"; do
+  for name in "${applied[@]}"; do
     local reps
     reps="$(kx -n "$NAMESPACE" get deployment "$name" -o jsonpath='{.spec.replicas}' 2>/dev/null)"
     [ "$reps" = "0" ] && evictions=$((evictions + 1))

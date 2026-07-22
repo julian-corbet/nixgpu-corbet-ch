@@ -111,7 +111,7 @@ carrying a ServiceAccount with the RBAC described above, `bench.env` mounted
 as a ConfigMap/Secret, and this directory baked into (or mounted onto) an
 image with `bash`+`kubectl`+`curl`+`jq`+`envsubst` (the same
 `bitnami/kubectl`-class image the `pressure-watcher` module already uses
-covers everything except `envsubst`, which ships in `gettext-base`/`gettext`
+covers everything except which ships in `gettext-base`/`gettext`
 on most base images — check yours). Running it from any kubectl-bearing
 shell — a laptop, a bastion, a CI runner with cluster access — works
 identically; the script has no notion of "where it runs", only of the

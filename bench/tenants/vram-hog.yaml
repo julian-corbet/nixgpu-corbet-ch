@@ -8,7 +8,8 @@
 # tenant cannot fit), and indirectly by S5/S9 as the "lowest-priority
 # occupant" pressure-watcher is expected to evict.
 #
-# Rendered with `envsubst`, restricted to exactly the variable list below —
+# Rendered by run-bench.sh render_tenant (pure-bash, envsubst-compatible syntax),
+# restricted to exactly the variable list below —
 # run-bench.sh does:
 #
 #   envsubst '$NAMESPACE $HOG_NAME $HOG_IMAGE $HOG_SIZE_GIB $PRIORITY_CLASS_NAME $MANAGED_LABEL_KEY $DEVICE_TOKEN_COMPUTE' \
