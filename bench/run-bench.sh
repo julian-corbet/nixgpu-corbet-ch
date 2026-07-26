@@ -59,6 +59,9 @@ S4_MIN_OK_COUNT="${S4_MIN_OK_COUNT:-$CONCURRENT_REQUESTS}"
 S5_CORESIDENCY_FLOOR_MIB="${S5_CORESIDENCY_FLOOR_MIB:-256}"
 S7_OPAQUE_BUDGET="${S7_OPAQUE_BUDGET:-0}"
 S9_FORCE_HOG_MARGIN_GIB="${S9_FORCE_HOG_MARGIN_GIB:-2}"
+S9_FORCE_HOG_WINDOW_S="${S9_FORCE_HOG_WINDOW_S:-60}"
+S9_FILLER_TARGET_FRACTION="${S9_FILLER_TARGET_FRACTION:-0.92}"
+S9_FILLER_WAIT_S="${S9_FILLER_WAIT_S:-120}"
 
 mkdir -p "$OUTPUT_DIR"
 RESULTS_JSON="$OUTPUT_DIR/results.json"
@@ -802,8 +805,30 @@ s5_multimodel() {
 # this script itself maintains — this IS "driven idempotently from outside",
 # not the k8s Job controller's own retry logic.
 s9_batch_idempotent() {
-  local id="S9"
-  local ledger="bench-s9-ledger"
+  local id; id="$(scenario_id S9)"
+  local ledger="bench-s9-ledger$BENCH_SUFFIX"
+  local filler_name="bench-s9-filler$BENCH_SUFFIX"
+  local force_name="bench-s9-force-interactive$BENCH_SUFFIX"
+
+  # Free-token pre-check: this scenario needs TWO free compute tokens AT
+  # ONCE — a filler that must actually succeed, plus a force-hog that must
+  # actually schedule in order to even attempt (and fail) its own
+  # allocation. A token-starved pod stays Pending, and a Pending pod's
+  # containerStatuses[0].ready is an EMPTY string — matching neither the
+  # watcher's starved ("false") nor victim ("true") branch, so it is
+  # invisible to the watcher, not merely slow. Same class of gap S1 already
+  # guards against for its own co-residence hogs; S9 needs the same guard
+  # because on this platform's real target cluster, standing tenants
+  # (an always-on broker, a TTL-warm app) routinely hold most or all lanes.
+  local alloc used free
+  alloc="$(kx get nodes -o json | jq -r "[.items[].status.allocatable[\"$DEVICE_TOKEN_COMPUTE\"] // \"0\" | tonumber] | add")"
+  used="$(kx get pods -A -o json | jq -r "[.items[] | select(.status.phase == \"Running\" or .status.phase == \"Pending\") | select(.metadata.namespace != \"$NAMESPACE\") | .spec.containers[].resources.requests[\"$DEVICE_TOKEN_COMPUTE\"] // \"0\" | tonumber] | add")"
+  free=$((alloc - used))
+  if [ "$free" -lt 2 ]; then
+    record_result "$id" SKIP "only $free free $DEVICE_TOKEN_COMPUTE token(s) (real tenants hold the rest) — need 2 at once (filler + force-hog) to ever establish real VRAM pressure; rerun when the card's lanes allow"
+    return 0
+  fi
+
   kx -n "$NAMESPACE" delete configmap "$ledger" --ignore-not-found=true >/dev/null 2>&1 || true
   kx -n "$NAMESPACE" create configmap "$ledger" >/dev/null
   kx -n "$NAMESPACE" label configmap "$ledger" 'bench.nixgpu.corbet.ch/run=true' --overwrite >/dev/null
@@ -819,7 +844,7 @@ s9_batch_idempotent() {
     # `local` statement before the first assignment lands, so referencing
     # $idx in the same statement dies with `set -u`.
     local idx="$1"
-    local name="bench-s9-item-$idx"
+    local name="bench-s9-item$BENCH_SUFFIX-$idx"
     kx -n "$NAMESPACE" delete pod "$name" --ignore-not-found=true --wait=false >/dev/null 2>&1 || true
     cat <<EOF | kx -n "$NAMESPACE" apply -f - >/dev/null
 apiVersion: v1
@@ -850,69 +875,127 @@ spec:
 EOF
   }
 
-  local i
-  for i in $(seq 1 "$BATCH_JOB_COUNT"); do submit_batch_item "$i"; done
+  # Establish REAL VRAM pressure BEFORE the batch's own clock starts. The
+  # vram-hog script (tenants/vram-hog.yaml) is all-or-nothing: a single
+  # torch.empty() call that either lands the FULL requested amount or
+  # raises and crashes, holding zero VRAM either way if it fails — so an
+  # interactive hog sized to NOT fit contributes nothing to measured
+  # vram_used, ever, and the watcher's press gate (measured
+  # vram_used/vram_total > HI_WATER) can never trigger from that pod alone.
+  # A filler, sized to actually SUCCEED and land real VRAM, is applied
+  # first; only once it is CONFIRMED resident does the (always-fails)
+  # force-hog get sized and applied, and only THEN do the batch items get
+  # submitted — this way there is no race between "how long the filler
+  # takes to land" and "how long the batch items take to finish": pressure
+  # already exists from t=0 of every item's lifetime, and the watcher only
+  # has to react within its own normal tick+grace+cooldown latency, not
+  # beat a fixed batch deadline. It runs at PRIORITY_INTERACTIVE (same tier
+  # as the force-hog) specifically so it is NEVER the watcher's
+  # lowest-priority pick ahead of the best-effort batch items: this
+  # scenario is about the batch surviving preemption, not about which
+  # tenant the watcher evicts to create room.
+  local vt vu filler_gib
+  vt="$(t_vram_total)"; vu="$(t_vram_used)"
+  if [ -n "$vt" ] && [ -n "$vu" ]; then
+    filler_gib="$(awk -v t="$vt" -v u="$vu" -v f="$S9_FILLER_TARGET_FRACTION" \
+      'BEGIN{g=(t*f-u)/1073741824; if (g < 1) g = 1; printf "%.1f", g}')"
+    log "S9: sizing filler from telemetry: total=$vt used=$vu target_fraction=$S9_FILLER_TARGET_FRACTION -> ${filler_gib} GiB"
+  else
+    filler_gib="${S2_HOG_GIB:-15}"
+    warn "S9: telemetry unavailable — falling back to S2_HOG_GIB=$filler_gib for the filler (real VRAM pressure not guaranteed)"
+  fi
+  local filler_f="$RENDER_TMP_DIR/s9-filler$BENCH_SUFFIX.yaml"
+  render_hog "$filler_f" "$filler_name" "$filler_gib" "$PRIORITY_INTERACTIVE"
+  apply_tenant "$filler_f"
+  if ! wait_ready "$filler_name" "$S9_FILLER_WAIT_S"; then
+    warn "S9: filler never reached Ready within ${S9_FILLER_WAIT_S}s — real VRAM pressure was never established"
+    delete_tenant_by_name deployment "$filler_name"
+    kx -n "$NAMESPACE" delete configmap "$ledger" --ignore-not-found=true >/dev/null 2>&1 || true
+    record_result "$id" SKIP "filler never reached Ready within ${S9_FILLER_WAIT_S}s (sized ${filler_gib} GiB) — real VRAM pressure was never established, so no batch was even attempted (raise S9_FILLER_WAIT_S, or lower S9_FILLER_TARGET_FRACTION if the ask itself doesn't fit)"
+    return 0
+  fi
+  log "S9: filler landed ${filler_gib} GiB — card should now read genuine pressure"
 
-  # Force a mid-run preemption: start the interactive-priority hog partway
-  # through so the pressure-watcher's fallback (delete the lowest-priority
-  # managed pod when it has no Deployment owner — exactly these bare item
-  # pods) kills at least one in-flight item.
-  #
-  # The hog is sized from LIVE telemetry — (free VRAM + margin) GiB — so it
-  # genuinely cannot fit and starvation actually happens. A fixed size would
-  # silently under-pressure a card that happens to be mostly empty at this
-  # point in the suite (free 15 GiB, fixed 15 GiB hog -> it just fits -> no
-  # preemption -> the scenario "passes" without testing B13 at all).
-  local vt vu force_gib
+  # Force a preemption: the interactive force-hog, sized from a FRESH
+  # telemetry read taken now that the filler is confirmed resident, so it
+  # is sized against what is actually still free rather than what was free
+  # before the filler landed. It genuinely cannot fit and stays not-Ready,
+  # which is the starved-higher-priority signal the watcher's fallback
+  # (delete the lowest-priority managed pod when it has no Deployment owner
+  # — exactly these bare item pods) reacts to.
+  local force_gib
   vt="$(t_vram_total)"; vu="$(t_vram_used)"
   if [ -n "$vt" ] && [ -n "$vu" ]; then
     force_gib="$(awk -v t="$vt" -v u="$vu" -v m="$S9_FORCE_HOG_MARGIN_GIB" \
       'BEGIN{g=(t-u)/1073741824 + m; if (g < 1) g = 1; printf "%.1f", g}')"
     log "S9: sizing force-hog from telemetry: total=$vt used=$vu -> ${force_gib} GiB (margin ${S9_FORCE_HOG_MARGIN_GIB} GiB)"
   else
-    force_gib="$S2_HOG_GIB"
-    warn "S9: telemetry unavailable — falling back to S2_HOG_GIB=$S2_HOG_GIB for the force-hog (preemption not guaranteed)"
+    force_gib="${S2_HOG_GIB:-15}"
+    warn "S9: telemetry unavailable — falling back to S2_HOG_GIB=$force_gib for the force-hog (preemption not guaranteed)"
   fi
-
-  sleep "$((BATCH_ITEM_WORK_SECONDS / 2))"
-  local force_f="$RENDER_TMP_DIR/s9-force.yaml"
-  render_hog "$force_f" bench-s9-force-interactive "$force_gib" "$PRIORITY_INTERACTIVE"
+  local force_f="$RENDER_TMP_DIR/s9-force$BENCH_SUFFIX.yaml"
+  render_hog "$force_f" "$force_name" "$force_gib" "$PRIORITY_INTERACTIVE"
   apply_tenant "$force_f"
+
+  # Only now start the batch's own clock — pressure already exists, so
+  # nothing here is racing the filler's own startup latency anymore.
+  local i
+  for i in $(seq 1 "$BATCH_JOB_COUNT"); do submit_batch_item "$i"; done
 
   # Driver loop: resubmit anything gone-but-not-done, until the ledger has
   # all M entries or a generous overall timeout elapses. Every resubmission
   # is counted: it is the OBSERVED preemption evidence the verdict needs.
+  #
+  # The force-hog is bounded to S9_FORCE_HOG_WINDOW_S, not left running for
+  # the whole deadline: these item pods hold no VRAM of their own, so no
+  # amount of evicting them can ever actually satisfy the hog's demand — it
+  # is a permanently-unsatisfiable decoy by construction. Once at least one
+  # resubmission has been observed (the evidence B13 needs) there is nothing
+  # further to gain from keeping it starved, and leaving an interactive pod
+  # that can never fit sitting on a live cluster only risks the watcher
+  # hunting down real, unrelated tenants too. Remove it as soon as evidence
+  # exists, or once the window elapses with none, whichever comes first.
   local deadline=$((BATCH_JOB_COUNT * BATCH_ITEM_WORK_SECONDS * 3 + EVICTION_BUDGET_S))
-  local waited=0 done_count=0 resubmissions=0
+  local waited=0 done_count=0 resubmissions=0 hog_removed=false
   while [ "$waited" -lt "$deadline" ]; do
-    done_count="$(kx -n "$NAMESPACE" get configmap "$ledger" -o json 2>/dev/null | jq '(.data // {}) | length')"
+    done_count="$(kx -n "$NAMESPACE" get configmap "$ledger" -o json 2>/dev/null | jq '(.data // {}) | length' 2>/dev/null)"
+    # A transient apiserver read failure must never masquerade as "0 done"
+    # forever, but it must also never crash the arithmetic/JSON below —
+    # normalize anything that isn't a plain non-negative integer to 0.
+    [[ "$done_count" =~ ^[0-9]+$ ]] || done_count=0
     [ "$done_count" -ge "$BATCH_JOB_COUNT" ] && break
     for i in $(seq 1 "$BATCH_JOB_COUNT"); do
       local has_entry phase
       has_entry="$(kx -n "$NAMESPACE" get configmap "$ledger" -o jsonpath="{.data.item-$i}" 2>/dev/null || true)"
       [ "$has_entry" = "done" ] && continue
-      phase="$(kx -n "$NAMESPACE" get pod "bench-s9-item-$i" -o jsonpath='{.status.phase}' 2>/dev/null || echo "Absent")"
+      phase="$(kx -n "$NAMESPACE" get pod "bench-s9-item$BENCH_SUFFIX-$i" -o jsonpath='{.status.phase}' 2>/dev/null || echo "Absent")"
       if [ "$phase" = "Absent" ] || [ "$phase" = "Failed" ]; then
         log "S9: item $i missing/failed (phase=$phase) and not yet done — resubmitting"
         submit_batch_item "$i"
         resubmissions=$((resubmissions + 1))
       fi
     done
+    if [ "$hog_removed" = false ] && { [ "$resubmissions" -ge 1 ] || [ "$waited" -ge "$S9_FORCE_HOG_WINDOW_S" ]; }; then
+      log "S9: removing force-hog after ${waited}s (resubmissions=$resubmissions) — evidence window closed, letting the batch drain uninterrupted"
+      delete_tenant_by_name deployment "$force_name"
+      hog_removed=true
+    fi
     sleep "$TICK_S"; waited=$((waited + TICK_S))
   done
 
-  delete_tenant_by_name deployment bench-s9-force-interactive
-  for i in $(seq 1 "$BATCH_JOB_COUNT"); do kx -n "$NAMESPACE" delete pod "bench-s9-item-$i" --ignore-not-found=true --wait=false >/dev/null 2>&1 || true; done
+  [ "$hog_removed" = false ] && delete_tenant_by_name deployment "$force_name"
+  delete_tenant_by_name deployment "$filler_name"
+  for i in $(seq 1 "$BATCH_JOB_COUNT"); do kx -n "$NAMESPACE" delete pod "bench-s9-item$BENCH_SUFFIX-$i" --ignore-not-found=true --wait=false >/dev/null 2>&1 || true; done
   kx -n "$NAMESPACE" delete configmap "$ledger" --ignore-not-found=true >/dev/null 2>&1 || true
 
   local meas
   meas="$(jq -n --argjson done "$done_count" --argjson m "$BATCH_JOB_COUNT" \
-    --argjson resub "$resubmissions" --arg fg "$force_gib" \
-    '{done:$done, expected:$m, resubmissions:$resub, force_hog_gib:($fg|tonumber)}')"
+    --argjson resub "$resubmissions" --arg fg "$force_gib" --arg flg "$filler_gib" \
+    '{done:$done, expected:$m, resubmissions:$resub, force_hog_gib:($fg|tonumber), filler_gib:($flg|tonumber)}')"
   if [ "$done_count" -ge "$BATCH_JOB_COUNT" ] && [ "$resubmissions" -ge 1 ]; then
     record_result "$id" PASS "all $BATCH_JOB_COUNT batch items completed exactly once, surviving $resubmissions observed resubmission(s) after forced preemption" "$meas"
   elif [ "$done_count" -ge "$BATCH_JOB_COUNT" ]; then
-    record_result "$id" SKIP "preemption never occurred — ledger complete but 0 resubmissions were observed, so B13 was not exercised (raise S9_FORCE_HOG_MARGIN_GIB or BATCH_ITEM_WORK_SECONDS)" "$meas"
+    record_result "$id" SKIP "preemption never occurred — the filler DID land real VRAM pressure (${filler_gib} GiB), but 0 resubmissions were observed, so B13 was not exercised (raise BATCH_ITEM_WORK_SECONDS, or check the force-hog log/events for why it never reached a sustained not-Ready state)" "$meas"
   else
     record_result "$id" FAIL "only $done_count/$BATCH_JOB_COUNT items completed within the deadline ($resubmissions resubmissions)" "$meas"
   fi

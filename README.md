@@ -72,6 +72,17 @@ on this repo's `nixgpu.corbet.ch/*` defaults). Each module directory
 documents its options (`nixidyModules.*`). [CONTRACT.md](CONTRACT.md) is the
 behavior contract the platform is built and tested against.
 
+The repository can now also demonstrate that on its own: `nix flake check`
+renders **all four modules** through real nixidy, from the placeholder values in
+[examples/all](examples/all). That is a narrow claim on purpose — it proves the
+modules evaluate and render, not that they arbitrate correctly, which is what the
+live dogfooding above is evidence for. Until this landed, `nixidy` was not even a
+flake input here, so nothing in CI evaluated these modules at all.
+
+Worth noting what that check needed: of every option across all four modules,
+**exactly one has no default** (`ondemandFront.caddyImage`). The arbiter is
+almost entirely knowledge, because how a card is shared does not vary by site.
+
 The token cap is proven across a real range on that card, not just at one
 setting: raised live from 2 to 3 to 16, with a deliberate thundering-herd
 stress test at 16 (six best-effort tenants demanding 18 GiB on a 16 GiB card)

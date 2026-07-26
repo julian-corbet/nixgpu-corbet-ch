@@ -45,17 +45,19 @@ let
           driver's compute node(s) plus a render node; a decode/encode lane
           may need only the render node.
 
-          **Device indexes are NOT portable across machines.** `/dev/dri/cardN`
-          numbering depends on enumeration order (a BMC/IPMI virtual VGA
-          adapter frequently claims `card0`, pushing the real GPU to `card1`
-          or higher; a second display adapter shifts it further). Never copy
-          these defaults onto a new machine without checking that machine's
-          own `/dev/dri` first (`ls /dev/dri`, cross-check against
-          `cat /sys/class/drm/card*/device/uevent` or `lspci` to find which
-          `cardN` is actually the GPU you mean to share). Injecting the
-          wrong card is silent at apply time and only surfaces as "the
-          plugin advertises devices that don't work" or, worse, "a
-          management/console adapter got exposed to workloads".
+          **Prefer the vendor-keyed stable paths over numbered `/dev/dri/cardN`
+          nodes.** `/dev/dri/cardN` numbering depends on enumeration order (a
+          BMC/IPMI virtual VGA adapter frequently claims `card0`, pushing the
+          real GPU to `card1` or higher), and that order is not guaranteed
+          stable across a kernel update, a firmware update, or even
+          boot-to-boot under an async-probe kernel — injecting the wrong card
+          is silent at apply time and only surfaces as "the plugin advertises
+          devices that don't work" or, worse, "a management/console adapter
+          got exposed to workloads". Enable the sibling
+          `nixgpu.nixosModules.stableDevicePaths` on the GPU-bearing host and
+          reference `/dev/dri/by-vendor/<name>-card` / `-render` here instead
+          (the module resolves by PCI vendor ID, not enumeration index — see
+          its own docs). The defaults below do exactly this.
         '';
       };
     };
@@ -134,16 +136,16 @@ in
           count = 2;
           paths = [
             "/dev/kfd"
-            "/dev/dri/renderD128"
-            "/dev/dri/card1"
+            "/dev/dri/by-vendor/amd-render"
+            "/dev/dri/by-vendor/amd-card"
           ];
         }
         {
           name = "vcn";
           count = 2;
           paths = [
-            "/dev/dri/renderD128"
-            "/dev/dri/card1"
+            "/dev/dri/by-vendor/amd-render"
+            "/dev/dri/by-vendor/amd-card"
           ];
         }
       ];
@@ -157,11 +159,11 @@ in
         point of splitting them into separate lanes rather than one shared
         `gpu` resource.
 
-        SEE THE `paths` OPTION DOC ABOVE: the `/dev/dri/cardN` index in
-        these defaults is NOT portable. It was `card1` on the machine this
-        was extracted from (whose `card0` was a BMC/management VGA
-        adapter); your machine's numbering may differ or match by
-        coincidence. Verify before trusting the default.
+        SEE THE `paths` OPTION DOC ABOVE: the defaults reference the
+        vendor-keyed `/dev/dri/by-vendor/amd-*` symlinks, not a numbered
+        `/dev/dri/cardN` — enable the sibling `nixgpu.nixosModules.
+        stableDevicePaths` on the GPU-bearing host so these resolve
+        correctly regardless of DRM enumeration order.
       '';
     };
 

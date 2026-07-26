@@ -301,52 +301,97 @@ answers within the budget, or opaque errors exceed the budget.
 **Subcommand:** `run-bench.sh s9`
 
 **Procedure:**
-1. Create an empty ConfigMap (`bench-s9-ledger`) as the external "done"
-   record — this stands in for whatever a real batch driver would track
-   completed items in (files on disk, a database row, ...).
-2. Submit `BATCH_JOB_COUNT` bare Pods (`restartPolicy: Never`, best-effort
-   priority), one per item index. Each item pod: checks whether its own key
-   already exists in the ledger (idempotent no-op if so), otherwise
-   simulates `BATCH_ITEM_WORK_SECONDS` of work and then patches its key into
-   the ledger.
-3. Partway through (`BATCH_ITEM_WORK_SECONDS / 2`), apply an
-   interactive-priority `vram-hog.yaml` **sized from live telemetry**:
-   `(vram_total - vram_used) + S9_FORCE_HOG_MARGIN_GIB` GiB, so it
-   genuinely cannot fit and the pressure-watcher must reclaim (a fixed size
-   silently under-pressures a mostly-empty card, and the scenario would
-   "pass" without B13 ever being exercised). The item pods themselves hold
-   **no device token and touch no GPU** — they are targeted because they
-   carry the managed label at best-effort priority with no Deployment
-   owner, which is exactly the population the watcher's documented fallback
-   (pod delete instead of scale-to-0) selects its lowest-priority victim
-   from.
-4. Driver loop (this **is** the "idempotent batch driver" B13 describes —
+1. **Free-token pre-check**, before anything else: this scenario needs TWO
+   free `devic.es/rocm-compute` tokens at once — a filler that must actually
+   succeed (below), plus a force-hog that must actually schedule to even
+   attempt its own allocation. A token-starved pod stays `Pending`, and a
+   `Pending` pod's container readiness reads as an **empty string** — which
+   matches neither the watcher's starved (`false`) nor victim (`true`)
+   branch, so a token-starved force-hog is invisible to the watcher, not
+   merely slow. When fewer than 2 tokens are free (real standing tenants —
+   an always-on broker, a TTL-warm app — routinely hold most or all lanes on
+   the reference cluster), S9 records a **SKIP** with the free-token count
+   as the reason, exactly like S1's own free-token pre-check.
+2. Establish **real** VRAM pressure before starting the batch's clock. The
+   `vram-hog.yaml` allocator is all-or-nothing (a single `torch.empty()`
+   call that either lands the FULL requested amount or crashes holding
+   ZERO) — so a hog deliberately sized to *not* fit contributes nothing to
+   measured `vram_used`, ever, and alone can never cross the
+   pressure-watcher's `HI_WATER` gate. A **filler** is applied first, sized
+   from live telemetry to actually succeed: `vram_total *
+   S9_FILLER_TARGET_FRACTION - vram_used` GiB. The scenario waits (up to
+   `S9_FILLER_WAIT_S`) for it to report `Ready` — confirming real VRAM
+   landed — and **SKIPs** with a distinct reason if it never does, rather
+   than proceeding into a run that cannot possibly exercise B13.
+3. Only once the filler is confirmed resident: take a **fresh** telemetry
+   reading and apply the interactive-priority force-hog, sized as
+   `(vram_total - vram_used) + S9_FORCE_HOG_MARGIN_GIB` GiB against what is
+   now actually free — genuinely cannot fit, stays not-`Ready`. Both the
+   filler and the force-hog run at the same `gpu-interactive` priority tier,
+   specifically so neither is ever the watcher's lowest-priority pick ahead
+   of the best-effort batch items below (a same-tier tie can never be
+   selected as the "lowest priority Ready pod" over a strictly-lower-priority
+   item — B13 is about the *batch* surviving preemption, not about which
+   tenant the watcher evicts to make room).
+4. **Only now** submit `BATCH_JOB_COUNT` bare Pods (`restartPolicy: Never`,
+   best-effort priority), one per item index — pressure already exists, so
+   nothing races the filler's own startup latency. Each item pod: checks
+   whether its own key already exists in the ledger (idempotent no-op if
+   so), otherwise simulates `BATCH_ITEM_WORK_SECONDS` of work and then
+   patches its key into an external ledger ConfigMap (created just before
+   this step). The item pods themselves hold **no device token and touch no
+   GPU** — they are targeted because they carry the managed label at
+   best-effort priority with no Deployment owner, which is exactly the
+   population the watcher's documented fallback (pod delete instead of
+   scale-to-0) selects its lowest-priority victim from. A direct consequence
+   of holding no VRAM: evicting any number of them can never actually
+   satisfy the force-hog — by construction it is a permanently-unsatisfiable
+   decoy, never expected to reach `Ready` itself. `BATCH_ITEM_WORK_SECONDS`
+   only needs to outlast the watcher's own reaction latency (tick interval
+   times grace-tick count) from this point on, not race anything else's
+   startup time.
+5. Driver loop (this **is** the "idempotent batch driver" B13 describes —
    external to the platform): every `TICK_S`, check the ledger for missing
    entries; for each one whose pod is gone or `Failed`, resubmit a fresh pod
    at the same index, **counting every resubmission** (that count is the
-   observed-preemption evidence the verdict requires). Continue until the
-   ledger has all `BATCH_JOB_COUNT` entries or a generous deadline elapses.
+   observed-preemption evidence the verdict requires). The force-hog is
+   removed as soon as one resubmission is observed, or once
+   `S9_FORCE_HOG_WINDOW_S` elapses with none — whichever comes first —
+   rather than left running against a live cluster for the whole deadline
+   with a demand nothing in this scenario can ever satisfy. The driver loop
+   itself continues (without the hog) until the ledger has all
+   `BATCH_JOB_COUNT` entries or a generous overall deadline elapses.
 
 **Pass criteria:** the ledger ends up with exactly `BATCH_JOB_COUNT` entries
 — every item completed, exactly once recorded — **and at least one
 resubmission was observed** (proof a preemption actually happened).
 
-**Skips if:** the ledger completes with zero resubmissions — recorded as
-SKIP "preemption never occurred", because a run in which nothing was ever
-killed proves nothing about B13 (raise `S9_FORCE_HOG_MARGIN_GIB` or
-`BATCH_ITEM_WORK_SECONDS` and rerun).
+**Skips if:** fewer than 2 `devic.es/rocm-compute` tokens are free (step 1);
+the filler never reaches `Ready` within `S9_FILLER_WAIT_S` (step 2, real
+pressure never established); or the ledger completes with zero resubmissions
+despite pressure being confirmed (step 5) — a run in which nothing was ever
+killed proves nothing about B13 (raise `BATCH_ITEM_WORK_SECONDS`, or check
+the force-hog's own events/logs for why it never reached a sustained
+not-`Ready` state).
 
 **Fails if:** the deadline elapses with any item still missing from the
 ledger.
 
-**Observed in practice:** on the one real run to date, the force-hog sizing
-logic itself worked correctly against live telemetry (logged as
-`sizing force-hog from telemetry: total=17163091968 used=8605265920 -> 10.0
-GiB (margin 2 GiB)`), and the ledger completed with all items recorded — but
-zero resubmissions were observed, so the run recorded SKIP, not PASS. B13 (an
-idempotent batch actually surviving a real preemption) has not yet been
-exercised end-to-end by this bench; the sizing and the ledger mechanics are
-proven, the preemption-and-resubmit path is not.
+**Revision history:** the scenario originally sized ONE interactive hog to
+deliberately not fit and applied it partway through a short
+`BATCH_ITEM_WORK_SECONDS` — this recorded SKIP with 0 resubmissions on every
+real run. Two distinct root causes were found and fixed: (1) 8s of simulated
+item work was shorter than the watcher's own reaction latency, so items
+always finished untouched (fixed by raising the value, though this alone
+was insufficient); (2) more fundamentally, the vram-hog allocator's
+all-or-nothing behavior means a hog sized to fail holds zero VRAM and can
+never cross the watcher's pressure gate on its own, regardless of timing —
+the current two-tenant (filler + force-hog) design and the free-token
+pre-check above are the fix for that deeper cause. See
+`~/agents/knowledge/fleet/server/gpu-platform.md` (private) or the project's
+own commit history for the full diagnostic trail, including the adversarial
+review that caught the token-exhaustion and clock-ordering gaps in the
+first attempt at this fix.
 
 ---
 
