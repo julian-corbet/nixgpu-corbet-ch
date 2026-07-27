@@ -42,6 +42,9 @@
         # Host-side counterpart to device-tokens' `paths`: enable this on any node running that
         # module so its default paths resolve correctly regardless of DRM enumeration order.
         stableDevicePaths = ./modules/nixos/stable-device-paths.nix;
+
+        # Only NixOS module exported today -- trivially the default.
+        default = self.nixosModules.stableDevicePaths;
       };
 
       # Planned NixOS-side module, not yet extracted:
