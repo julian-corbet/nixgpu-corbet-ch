@@ -60,6 +60,33 @@ behavior spec they implement); the kernel module is still to come:
   and TTM eviction-order patches for kernels that lack them. The watcher core
   runs on stock kernels reading sysfs.
 
+### Host-side
+
+Everything above is about **sharing** a card that already works. These are about
+the machine underneath it — and they are offered on both the NixOS and the
+Arch/CachyOS plane, because a GPU host is not necessarily a NixOS host.
+
+- **`stableDevicePaths`** *(NixOS)* — vendor-keyed `/dev/dri/by-vendor` symlinks,
+  so `device-tokens`' paths resolve regardless of DRM enumeration order.
+- **`toolchain`** *(NixOS + system-manager)* — the vendor compute runtime:
+  CUDA / ROCm / oneAPI-class, plus the vendor's own monitoring tool.
+
+  ```nix
+  nixgpu.toolchain = { enable = true; vendor = "amd"; };
+  ```
+
+  `sdk = false` keeps monitoring but drops the multi-gigabyte SDK — the right
+  shape for a cluster node running prebuilt images, where the container carries
+  its own toolkit and the host only has to expose a working device.
+
+  Each plane carries its own real implementation rather than a shared list with
+  a translation table, because the platforms disagree about more than spelling:
+  ROCm is three packages on Arch and one attribute set in nixpkgs, and NVIDIA's
+  userspace driver is a package on Arch but a *hardware option* on NixOS. The
+  NixOS module deliberately does not configure `hardware.nvidia` — driver choice
+  belongs to whoever knows the machine — and warns if the toolkit would install
+  with no driver behind it.
+
 ## Status
 
 **Pre-alpha, and fully dogfooded: the originating production cluster runs

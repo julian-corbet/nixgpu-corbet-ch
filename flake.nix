@@ -37,14 +37,33 @@
         ondemand-front = ./modules/ondemand-front;
       };
 
+      # HOST-SIDE modules. Everything above is about sharing a card that already works; these are
+      # about the machine underneath it. Both planes are offered, because a GPU host is not
+      # necessarily a NixOS host -- an Arch workstation with a real card is still a GPU host, and
+      # until `toolchain` landed this project had nothing at all to say to one.
       nixosModules = {
         # vendor-keyed /dev/dri/by-vendor symlinks -- see modules/nixos/stable-device-paths.nix.
         # Host-side counterpart to device-tokens' `paths`: enable this on any node running that
         # module so its default paths resolve correctly regardless of DRM enumeration order.
         stableDevicePaths = ./modules/nixos/stable-device-paths.nix;
 
-        # Only NixOS module exported today -- trivially the default.
+        # The vendor compute runtime (CUDA / ROCm / oneAPI class), resolved to nixpkgs attributes.
+        toolchain = { ... }: {
+          imports = [ ./modules/toolchain/options.nix ./modules/toolchain/nixos.nix ];
+        };
+
         default = self.nixosModules.stableDevicePaths;
+      };
+
+      # Arch/CachyOS plane. `toolchain` declares pacman names into nixarch.packages.pacman, so it
+      # pairs with nixarch.systemManagerModules.packages: this module says WHAT, nixarch's own
+      # reconciler installs it. Only one module in the class, so it is trivially the default.
+      systemManagerModules = {
+        toolchain = { ... }: {
+          imports = [ ./modules/toolchain/options.nix ./modules/toolchain/system-manager.nix ];
+        };
+
+        default = self.systemManagerModules.toolchain;
       };
 
       # Planned NixOS-side module, not yet extracted:
