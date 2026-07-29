@@ -42,10 +42,14 @@
       # necessarily a NixOS host -- an Arch workstation with a real card is still a GPU host, and
       # until `toolchain` landed this project had nothing at all to say to one.
       nixosModules = {
-        # vendor-keyed /dev/dri/by-vendor symlinks -- see modules/nixos/stable-device-paths.nix.
+        # vendor-keyed /dev/dri/by-vendor symlinks -- see modules/stable-device-paths/.
         # Host-side counterpart to device-tokens' `paths`: enable this on any node running that
         # module so its default paths resolve correctly regardless of DRM enumeration order.
-        stableDevicePaths = ./modules/nixos/stable-device-paths.nix;
+        # Offered on BOTH planes (see systemManagerModules below) -- an Arch laptop with a single
+        # card hits the identical hazard the moment a DisplayLink dock adds an `evdi` node.
+        stableDevicePaths = { ... }: {
+          imports = [ ./modules/stable-device-paths/options.nix ./modules/stable-device-paths/nixos.nix ];
+        };
 
         # The vendor compute runtime (CUDA / ROCm / oneAPI class), resolved to nixpkgs attributes.
         toolchain = { ... }: {
@@ -61,6 +65,14 @@
       systemManagerModules = {
         toolchain = { ... }: {
           imports = [ ./modules/toolchain/options.nix ./modules/toolchain/system-manager.nix ];
+        };
+
+        # Same mechanism as nixosModules.stableDevicePaths, written through environment.etc
+        # because system-manager has no services.udev. A single-GPU laptop is not exempt from
+        # DRM renumbering -- a DisplayLink dock inserts an `evdi` node and shifts everything
+        # after it, which is exactly how this surfaced on a two-GPU host on 2026-07-29.
+        stableDevicePaths = { ... }: {
+          imports = [ ./modules/stable-device-paths/options.nix ./modules/stable-device-paths/system-manager.nix ];
         };
 
         default = self.systemManagerModules.toolchain;
