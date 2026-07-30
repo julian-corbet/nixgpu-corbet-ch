@@ -121,7 +121,14 @@ in
       type = lib.types.attrsOf (lib.types.submodule {
         options = {
           vendor = lib.mkOption {
-            type = lib.types.str;
+            # NOT bare `str`, which accepts "". This name becomes a path component in the generated
+            # symlink (`/dev/dri/by-vendor/<vendor>-card`), so an empty or whitespace-bearing value
+            # would produce a rule pointing at `/dev/dri/by-vendor/-card` -- syntactically valid
+            # udev that silently means nothing. Constrained here rather than by an assertion so the
+            # guard applies whether or not any host plane is enabled: an assertion in this module's
+            # `config` section only fires when something reads it, and a facts-only host reads
+            # nothing.
+            type = lib.types.strMatching "[a-zA-Z0-9][a-zA-Z0-9_-]*";
             example = "amd";
             description = ''
               The silicon vendor, in the operator's own words -- not a fixed enum here, because
@@ -135,7 +142,15 @@ in
           };
 
           pciId = lib.mkOption {
-            type = lib.types.str;
+            # NOT bare `str`. A PCI vendor ID has exactly one shape -- `0x` plus four hex digits --
+            # and this value is interpolated straight into the udev match condition
+            # (`ATTRS{vendor}=="${pciId}"`). Every wrong shape fails the same silent way: the rule
+            # parses, matches no device, and the symlink simply never appears, which surfaces later
+            # as "the card moved" rather than as a config error. `""` is the worst case
+            # (`ATTRS{vendor}==""`) and was previously guarded by an assertion in nixhost that this
+            # wave deleted on the grounds that the owner enforces it; this is that enforcement,
+            # made stricter than the assertion was and active regardless of `enable`.
+            type = lib.types.strMatching "0x[0-9a-fA-F]{4}";
             example = "0x1002";
             description = ''
               The PCI vendor ID exactly as `/sys/class/drm/cardN/device/vendor` reports it (AMD is

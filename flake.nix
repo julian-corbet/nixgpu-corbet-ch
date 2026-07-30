@@ -113,6 +113,14 @@
         in
         {
           all-modules-render = env.environmentPackage;
+
+          # The host-side plane, which `all-modules-render` does not touch at all: that check
+          # renders `nixidyModules` only, so `nixosModules.stableDevicePaths` -- and the device
+          # inventory that is now the single owner of the vendor/PCI-ID fact -- had `nix flake
+          # check` passing while covering none of it.
+          stable-device-paths = import ./checks/stable-device-paths.nix {
+            pkgs = nixpkgs.legacyPackages.${system};
+          };
         });
 
       formatter = forAllSystems (system: nixpkgs.legacyPackages.${system}.nixpkgs-fmt);
