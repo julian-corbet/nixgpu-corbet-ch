@@ -17,6 +17,18 @@
 let
   cfg = config.nixgpu.pressureWatcher;
 
+  # THE ONE OWNER of the amdgpu sysfs attribute names (top-level `nixgpu.sysfs`, not nested under
+  # this app's own `nixgpu.pressureWatcher`): a kernel-interface fact about the discrete GPU itself,
+  # not an opinion of the pressure watcher. Declared here because this is nixgpu's only module that
+  # reads it today, but namespaced at `nixgpu.sysfs.*` on purpose, so ANY other consumer -- another
+  # nixgpu module tomorrow, or a sibling repo like nixllm mirroring it via `config.nixgpu.sysfs.* or
+  # <its own fallback>` (the family's `mirrorOf` idiom, see nixhost's modules/nixhost.nix) -- reads
+  # the SAME option instead of restating the string. Before this existed, the fact lived twice: once
+  # here as an option, once in nixllm as a bare literal in a shell script with no option at all -- and
+  # nothing checked whether the two agreed. Below, `sysfsCfg` is just this module's OWN read of that
+  # one owner, proving the pressure watcher is a consumer like any other, not a second source of truth.
+  sysfsCfg = config.nixgpu.sysfs;
+
   # The engine label key is embedded in a kubectl jsonpath expression, where every dot inside a
   # label key MUST be backslash-escaped ({.metadata.labels.foo\.bar/engine}) — jsonpath otherwise
   # treats the dots as path separators and the field silently reads empty, which would make every
@@ -78,19 +90,19 @@ let
       exit 1
     fi
 
-    # discover the discrete card's sysfs (biggest ${cfg.sysfs.vramTotalAttr}) under the
+    # discover the discrete card's sysfs (biggest ${sysfsCfg.vramTotalAttr}) under the
     # hostPath-mounted /host/sys. The attribute name is driver-specific (amdgpu by
-    # default) -- see nixgpu.pressureWatcher.sysfs.vramTotalAttr's description.
+    # default) -- see nixgpu.sysfs.vramTotalAttr's description.
     CARD=""
     for c in /host/sys/class/drm/card*/device; do
-      [ -r "$c/${cfg.sysfs.vramTotalAttr}" ] || continue
-      t=$(cat "$c/${cfg.sysfs.vramTotalAttr}" 2>/dev/null); [ "''${t:-0}" -gt 1000000000 ] && CARD="$c"
+      [ -r "$c/${sysfsCfg.vramTotalAttr}" ] || continue
+      t=$(cat "$c/${sysfsCfg.vramTotalAttr}" 2>/dev/null); [ "''${t:-0}" -gt 1000000000 ] && CARD="$c"
     done
     [ -n "$CARD" ] && log "watching VRAM+GTT via $CARD" || log "card sysfs not visible here — pod starvation signal only (no desktop spill signal)"
 
     rd(){ cat "$CARD/$1" 2>/dev/null; }
     vfrac(){ [ -z "$CARD" ] && { echo 1; return; }
-      u=$(rd ${cfg.sysfs.vramUsedAttr}); t=$(rd ${cfg.sysfs.vramTotalAttr})
+      u=$(rd ${sysfsCfg.vramUsedAttr}); t=$(rd ${sysfsCfg.vramTotalAttr})
       awk "BEGIN{print ($t>0)? $u/$t : 0}"; }
 
     owner_deploy(){ # ns pod -> owning Deployment name (pod -> RS -> Deployment), else empty
@@ -103,7 +115,7 @@ let
     log "gpu-pressure-watcher up on $NODE — reactive kill-lowest-priority (cluster pods + desktop GTT-spill)"
     cd=0                                            # cooldown ticks after a kill: let the reclaimed (pinned) VRAM actually land before re-deciding
     guard_bad=0; guard_cd=0                         # registration-guard state: consecutive zero-ticks + post-bounce cooldown
-    gtt_prev=$([ -n "$CARD" ] && rd ${cfg.sysfs.gttUsedAttr} || echo 0); gtt_prev=''${gtt_prev:-0}
+    gtt_prev=$([ -n "$CARD" ] && rd ${sysfsCfg.gttUsedAttr} || echo 0); gtt_prev=''${gtt_prev:-0}
     while true; do
       f=$(vfrac); press=$(awk "BEGIN{print ($f>$HI)?1:0}")
       # Select GPU pods by LABEL (${cfg.managedLabelKey}=true) so we see EVERY tenant regardless of
@@ -128,7 +140,7 @@ let
       done <<< "$data"
 
       # Desktop tenant: thrash = card full AND graphics spilling to system RAM (gtt_used rising past the noise floor).
-      gtt_now=$([ -n "$CARD" ] && rd ${cfg.sysfs.gttUsedAttr} || echo 0); gtt_now=''${gtt_now:-0}
+      gtt_now=$([ -n "$CARD" ] && rd ${sysfsCfg.gttUsedAttr} || echo 0); gtt_now=''${gtt_now:-0}
       if [ "$press" = 1 ] && [ "$gtt_now" -gt "$(( gtt_prev + GTT_DELTA ))" ]; then
         starve[__desktop__]=$(( ''${starve[__desktop__]:-0} + 1 ))
         [ "''${starve[__desktop__]}" -ge "$GRACE" ] && [ "$DESK_PRIO" -gt "$hi_prio" ] && { hi_prio=$DESK_PRIO; hi_pod="desktop(GTT-spill)"; }
@@ -217,6 +229,64 @@ let
   '';
 in
 {
+  # THE ONE OWNER of the amdgpu sysfs attribute names: a fact about the discrete GPU's kernel
+  # interface, not about this (or any) particular app. Top-level `nixgpu.sysfs`, deliberately NOT
+  # nested under `nixgpu.pressureWatcher` below, even though this module is nixgpu's only consumer
+  # of it today — nesting it under one app's namespace would make every OTHER consumer (another
+  # nixgpu module tomorrow; a sibling repo like nixllm's serving lane, which needs the same
+  # `vramTotalAttr` to find live VRAM size for its own fit-skip gate) either import an unrelated
+  # app's options just to read three strings, or fork its own copy — which is exactly the defect
+  # this option exists to close (the copy in nixllm was a bare literal with no option at all, and
+  # nothing checked whether it agreed with this one). A sibling repo mirrors this defensively —
+  # `config.nixgpu.sysfs.vramTotalAttr or <its own fallback>` (the family's `mirrorOf` idiom, see
+  # nixhost's modules/nixhost.nix) — so it keeps working with zero nixgpu dependency when this
+  # module, or nixgpu entirely, is absent from its environment.
+  options.nixgpu.sysfs = {
+    vramTotalAttr = lib.mkOption {
+      type = lib.types.str;
+      default = "mem_info_vram_total";
+      description = ''
+        sysfs attribute name (read from `/host/sys/class/drm/cardN/device/<attr>`)
+        used to both DISCOVER the card (the first `cardN` where this reads > 1 GB
+        is assumed to be the discrete GPU) and as the denominator of the
+        VRAM-full fraction (`hiWater`, in `pressureWatcher`) or the fit-skip gate
+        (in a sibling serving lane such as nixllm). This is one of amdgpu's own
+        attribute names, not a DRM-wide standard -- it was a hardware fact
+        hardcoded into more than one script body with no option at all until this
+        was added. A driver that doesn't expose it under this name (Intel's
+        i915/Xe report VRAM accounting through different files entirely) makes
+        card discovery find nothing: whichever consumer reads this degrades to
+        its own documented no-signal fallback (never a crash) until this is
+        overridden to that driver's real attribute name.
+      '';
+    };
+
+    vramUsedAttr = lib.mkOption {
+      type = lib.types.str;
+      default = "mem_info_vram_used";
+      description = ''
+        sysfs attribute name for currently-used VRAM -- the numerator of the
+        VRAM-full fraction (`hiWater`) in `pressureWatcher`. Same amdgpu-specific
+        caveat as `vramTotalAttr`: this is a driver-specific attribute, not a DRM
+        standard.
+      '';
+    };
+
+    gttUsedAttr = lib.mkOption {
+      type = lib.types.str;
+      default = "mem_info_gtt_used";
+      description = ''
+        sysfs attribute name for GTT (system-RAM-backed graphics memory) usage
+        -- the desktop GTT-spill signal (CONTRACT.md B9, gated by `gttDelta`) in
+        `pressureWatcher`. GTT is a TTM/amdgpu concept specifically; a different
+        in-kernel driver's equivalent counter, if one exists, will live under a
+        different name, and a driver with no GTT-spill concept at all has no
+        correct value to put here (the desktop-thrash signal simply never fires
+        for it).
+      '';
+    };
+  };
+
   options.nixgpu.pressureWatcher = {
     enable = lib.mkEnableOption
       "the GPU pressure watcher — reactive kill-lowest-priority under VRAM pressure, desktop GTT-spill detection, and the device-plugin registration guard";
@@ -293,50 +363,9 @@ in
       '';
     };
 
-    sysfs = {
-      vramTotalAttr = lib.mkOption {
-        type = lib.types.str;
-        default = "mem_info_vram_total";
-        description = ''
-          sysfs attribute name (read from `/host/sys/class/drm/cardN/device/<attr>`)
-          used to both DISCOVER the card (the first `cardN` where this reads > 1 GB
-          is assumed to be the discrete GPU) and as the denominator of the
-          VRAM-full fraction (`hiWater`). This is one of amdgpu's own attribute
-          names, not a DRM-wide standard -- it was a hardware fact hardcoded into
-          the script body with no option at all until this was added. A driver
-          that doesn't expose it under this name (Intel's i915/Xe report VRAM
-          accounting through different files entirely) makes card discovery find
-          nothing: the watcher logs "card sysfs not visible here" and degrades to
-          pod-starvation-only mode (no desktop GTT-spill signal, CONTRACT.md B9) --
-          never a crash, but a silently narrower watcher until this is overridden
-          to that driver's real attribute name.
-        '';
-      };
-
-      vramUsedAttr = lib.mkOption {
-        type = lib.types.str;
-        default = "mem_info_vram_used";
-        description = ''
-          sysfs attribute name for currently-used VRAM -- the numerator of the
-          VRAM-full fraction (`hiWater`). Same amdgpu-specific caveat as
-          `vramTotalAttr`: this is a driver-specific attribute, not a DRM
-          standard.
-        '';
-      };
-
-      gttUsedAttr = lib.mkOption {
-        type = lib.types.str;
-        default = "mem_info_gtt_used";
-        description = ''
-          sysfs attribute name for GTT (system-RAM-backed graphics memory) usage
-          -- the desktop GTT-spill signal (CONTRACT.md B9, gated by `gttDelta`).
-          GTT is a TTM/amdgpu concept specifically; a different in-kernel driver's
-          equivalent counter, if one exists, will live under a different name, and
-          a driver with no GTT-spill concept at all has no correct value to put
-          here (the desktop-thrash signal simply never fires for it).
-        '';
-      };
-    };
+    # sysfs.* moved 2026-07-30 -- see the top-level `options.nixgpu.sysfs` above, which is now the
+    # sole owner of these three attribute names. This module reads them via `sysfsCfg` (the `let`
+    # binding above), same as any other consumer would.
 
     hiWater = lib.mkOption {
       # strMatching so a non-numeric value fails at eval time instead of inside awk at runtime.

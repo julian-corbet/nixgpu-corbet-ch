@@ -86,6 +86,10 @@ the field as empty and silently break engine discovery.
 
 ## Options (`nixgpu.pressureWatcher.*`)
 
+The three `sysfs.*` attribute names moved out of this table 2026-07-30 — they
+are no longer pressure-watcher-specific. See "`nixgpu.sysfs.*` — the amdgpu
+attribute names" below.
+
 | Option | Type | Default | Description |
 |---|---|---|---|
 | `enable` | bool | `false` | Enable the pressure watcher application. |
@@ -97,9 +101,6 @@ the field as empty and silently break engine discovery.
 | `managedLabelKey` | str | `"nixgpu.corbet.ch/managed"` | Label key marking every managed GPU tenant (value `"true"`). |
 | `engineLabelKey` | str | `"nixgpu.corbet.ch/engine"` | Label key naming the tenant's GPU engine; value `engineExemptValue` = exempt media engine. |
 | `engineExemptValue` | str | `"vcn"` | Engine-label value marking media-engine tenants that are never compute victims or triggers. |
-| `sysfs.vramTotalAttr` | str | `"mem_info_vram_total"` | sysfs attribute (under `cardN/device/`) read for total VRAM; also used to discover which `cardN` is the discrete GPU. amdgpu-specific name, not a DRM standard — see the option's own description for what a different driver needs. |
-| `sysfs.vramUsedAttr` | str | `"mem_info_vram_used"` | sysfs attribute read for used VRAM (numerator of `hiWater`). Same amdgpu-specific caveat. |
-| `sysfs.gttUsedAttr` | str | `"mem_info_gtt_used"` | sysfs attribute read for GTT usage — the desktop GTT-spill signal (B9). GTT is a TTM/amdgpu concept; a different driver's equivalent, if any, lives under a different name. |
 | `hiWater` | strMatching `[0-9]*\.?[0-9]+` | `"0.85"` | VRAM-full gate, fraction of total (numeric string; non-numeric values fail at eval). Pressure is only "real" above this. |
 | `graceTicks` | int | `2` | Ticks a tenant must stay starved/spilling before a kill (anti-flap). |
 | `killCooldownTicks` | int | `3` | Ticks to wait after a kill for reclaimed VRAM to land before re-deciding (~18s). Lower = faster multi-eviction convergence for a large model needing several lanes freed. |
@@ -112,6 +113,27 @@ the field as empty and silently break engine discovery.
 | `guardLabel` | str | `"app=gpu-shares-device-plugin"` | Label selector for the device-plugin pod to bounce. |
 | `guardNamespace` | str | `"kube-system"` | Namespace of the device-plugin pod. |
 | `guardGraceTicks` | int | `5` | Zero-ticks before the bounce (anti-flap). |
+
+## `nixgpu.sysfs.*` — the amdgpu attribute names
+
+Top-level, not nested under `pressureWatcher`: these are facts about the
+discrete GPU's kernel interface, not an opinion of this one app. Declared in
+this module's `default.nix` because pressure-watcher is nixgpu's only
+in-repo consumer today, but under the shared `nixgpu.sysfs` namespace on
+purpose, so any other consumer — another nixgpu module later, or a sibling
+repo such as [nixllm](https://github.com/julian-corbet/nixllm-corbet-ch)
+(which needs `vramTotalAttr` for its own generator's fit-skip gate) — reads
+the SAME option instead of forking its own copy. A sibling repo mirrors this
+defensively (`config.nixgpu.sysfs.vramTotalAttr or <its own fallback>`, the
+family's `mirrorOf` idiom — see `nixhost`'s `modules/nixhost.nix`), which
+keeps it working with zero nixgpu dependency when this module — or nixgpu
+entirely — is absent from its environment.
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `sysfs.vramTotalAttr` | str | `"mem_info_vram_total"` | sysfs attribute (under `cardN/device/`) read for total VRAM; also used to discover which `cardN` is the discrete GPU. amdgpu-specific name, not a DRM standard — see the option's own description for what a different driver needs. |
+| `sysfs.vramUsedAttr` | str | `"mem_info_vram_used"` | sysfs attribute read for used VRAM (numerator of `hiWater`). Same amdgpu-specific caveat. |
+| `sysfs.gttUsedAttr` | str | `"mem_info_gtt_used"` | sysfs attribute read for GTT usage — the desktop GTT-spill signal (B9). GTT is a TTM/amdgpu concept; a different driver's equivalent, if any, lives under a different name. |
 
 ## Usage
 
@@ -128,7 +150,7 @@ the field as empty and silently break engine discovery.
 ```
 
 The DaemonSet runs privileged as root with a read-only hostPath mount of `/sys`
-— that is where the `sysfs.*` counters above live, under amdgpu's own
+— that is where the `nixgpu.sysfs.*` counters above live, under amdgpu's own
 attribute names by default. If the card's sysfs is not visible (wrong attribute
 names for a non-amdgpu driver, or no discrete GPU on the node at all), the
 watcher degrades gracefully to the pod-starvation signal only (no desktop

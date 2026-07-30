@@ -199,7 +199,9 @@ Part of an interoperating set — usable independently, designed together:
   bare-metal k3s on NixOS + the nixidy → Argo CD GitOps spine.
 - [nixllm](https://github.com/julian-corbet/nixllm-corbet-ch) — the serving
   lane: one shared LLM broker where the model store IS the registry
-  (implements this contract's B4/B10/B14/B15).
+  (implements this contract's B4/B10/B14/B15). Its generator mirrors this
+  repo's `nixgpu.sysfs.vramTotalAttr` (see `pressure-watcher`'s README) for
+  live VRAM size, instead of hardcoding amdgpu's attribute name a second time.
 - [nixapps](https://github.com/julian-corbet/nixapps-corbet-ch) — the
   tenants: curated app modules (image generation, TTS, …) that consume
   `nixgpu`'s three-line GPU contract.
