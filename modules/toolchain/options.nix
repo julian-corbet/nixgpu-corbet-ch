@@ -1,6 +1,11 @@
 # modules/toolchain/options.nix — the HOST-side GPU compute toolchain: which vendor's runtime a
 # machine needs on the metal, declared once and resolved per platform.
 #
+# LEVEL 1 (nixosModules/systemManagerModules): a fact about the host itself -- true
+# whether or not anything ever contends for the card. Not part of the Level 2 / edge
+# arbitration modules (device-tokens, priority-ladder, pressure-watcher, ondemand-front);
+# see the repo README's "Levels".
+#
 # WHY THIS BELONGS IN nixgpu. Everything else here is about SHARING a GPU that already works --
 # advertising lanes (device-tokens), ordering claimants (priority-ladder), evicting under pressure
 # (pressure-watcher), queuing (ondemand-front), and keeping device paths stable

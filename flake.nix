@@ -19,10 +19,15 @@
       forAllSystems = f: nixpkgs.lib.genAttrs systems f;
     in
     {
-      # nixidy modules (github:arnarg/nixidy) — imported into a nixidy env's
-      # `modules` list and rendered to manifests for Argo CD (see the sibling
-      # nixk3s project for the spine). Extracted from a production single-GPU
-      # cluster; generalized forms not yet re-verified live.
+      # LEVEL 2 / EDGE modules (nixhost vocabulary: an `environments.<name>` is
+      # Level 2, a projection of a Level-1 host resource). `<host>.gpu.apps`
+      # (bare-metal/podman tenants) and `<host>.k3s.gpu.apps` (pod tenants) are two
+      # independent consumer sets standing on the SAME Level-1 `<host>.resources.gpu`
+      # — these four modules are the edge property between those two branches, not a
+      # part of either one. They render as nixidy modules (github:arnarg/nixidy),
+      # imported into a nixidy env's `modules` list and rendered to manifests for
+      # Argo CD (see the sibling nixk3s project for the spine). Extracted from a
+      # production single-GPU cluster; generalized forms not yet re-verified live.
       #
       # All four are arbitration, and none of them uses the GPU: device-tokens
       # advertises the lanes, priority-ladder decides who wins a conflict,
@@ -30,6 +35,9 @@
       # ondemand-front is the waiting room that lets a rested workload give the
       # card back. An app that wants the card declares against these and
       # implements no part of them.
+      #
+      # Why these stay in the same repo as the Level-1 modules below rather than a
+      # separate arbiter repo: see README.md "Why one repo, not two".
       nixidyModules = {
         device-tokens = ./modules/device-tokens;
         priority-ladder = ./modules/priority-ladder;
@@ -37,10 +45,13 @@
         ondemand-front = ./modules/ondemand-front;
       };
 
-      # HOST-SIDE modules. Everything above is about sharing a card that already works; these are
-      # about the machine underneath it. Both planes are offered, because a GPU host is not
-      # necessarily a NixOS host -- an Arch workstation with a real card is still a GPU host, and
-      # until `toolchain` landed this project had nothing at all to say to one.
+      # LEVEL 1 modules (nixhost vocabulary: the host itself, `<host>.resources.gpu`
+      # -- true of the machine whether or not anything ever contends for the card).
+      # Everything above is Level 2 / edge, about sharing a card that already works;
+      # these are about the machine underneath it. Both planes are offered, because a
+      # GPU host is not necessarily a NixOS host -- an Arch workstation with a real
+      # card is still a GPU host, and until `toolchain` landed this project had
+      # nothing at all to say to one.
       nixosModules = {
         # vendor-keyed /dev/dri/by-vendor symlinks -- see modules/stable-device-paths/.
         # Host-side counterpart to device-tokens' `paths`: enable this on any node running that

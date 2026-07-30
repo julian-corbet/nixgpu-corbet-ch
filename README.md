@@ -35,10 +35,63 @@ exposes natively — sysfs VRAM/GTT counters, DRM cgroup accounting, device
 files a plain device plugin can hand out. Out-of-tree proprietary stacks
 don't provide that surface.
 
+## Levels
+
+`nixgpu` answers two different questions about one physical card, and the
+repo's own export shape already splits them along the boundary the
+`nixhost` namespace design draws between a host and what stands on it (one
+addressable graph, hostname-rooted: `<host>.resources.*` is the machine
+itself, `<host>.environments.<name>.*` is a projection standing on it):
+
+- **Level 1 — the host.** Does this machine have a working GPU at all: the
+  right vendor compute runtime installed, device nodes that don't move under
+  it. True of a single-user desktop with no cluster in sight — it has
+  nothing to do with sharing. Ships as `nixosModules` /
+  `systemManagerModules` (`stableDevicePaths`, `toolchain`).
+- **Level 2 / edge — who gets it.** Given a card that works, arbitrate
+  between everything that wants it. Bare-metal/podman apps and Kubernetes
+  pods are two independent consumer sets standing on the *same* Level-1
+  resource — `<host>.gpu.apps` and `<host>.k3s.gpu.apps` in `nixhost`'s
+  address space — and something has to decide who yields when both want the
+  card at once. That something is the four modules below: an edge property
+  connecting the two consumer branches, never a fact about either branch
+  alone. Ships as `nixidyModules`, rendered into the k3s environment.
+
+Neither level substitutes for the other: a host with a flawless toolchain
+still needs an arbiter the instant two tenants contend for the same VRAM, and
+an arbiter has nothing to arbitrate on a host where the card doesn't work in
+the first place.
+
+### Why one repo, not two
+
+The honest split is Level 1 vs. Level 2/edge — not "this repo" vs. "a
+sibling arbiter repo". Two things decided it stays one:
+
+1. **The export types already are the two levels.** `nixosModules` /
+   `systemManagerModules` render into a machine's own configuration;
+   `nixidyModules` render into a k3s environment's manifests. Nix's module
+   system already refuses to let one leak into the other — a second repo
+   would enforce, at real coordination cost, a boundary the flake outputs
+   already enforce for free.
+2. **Splitting a tested, dogfooded arbiter costs more than it clarifies.**
+   The four Level-2 modules are one contract-tested unit ([CONTRACT.md](CONTRACT.md),
+   [studies/](studies/), [bench/](bench/)) that runs together in production
+   today, and they already coordinate only through Kubernetes objects
+   (labels, `PriorityClass` values) — never through Nix. Filing them behind
+   a second flake input would not remove any coupling between
+   `device-tokens`, `priority-ladder`, `pressure-watcher`, and
+   `ondemand-front`; it would only add a version-pinning seam every consumer
+   has to keep in lockstep, for no mechanical benefit.
+
+A site that wants one level without the other already gets that for free —
+`nixosModules`/`systemManagerModules` and `nixidyModules` are independent
+export sets; nothing here requires importing both.
+
 ## Modules
 
-The first four modules have landed (see [CONTRACT.md](CONTRACT.md) for the
-behavior spec they implement); the kernel module is still to come:
+The first four (**Level 2 / edge**) modules have landed (see
+[CONTRACT.md](CONTRACT.md) for the behavior spec they implement); the kernel
+module is still to come:
 
 - **`device-tokens`** — split one card into parallel scheduling lanes
   (`compute` + `vcn` media engine) via a generic device plugin; co-scheduling
@@ -60,11 +113,12 @@ behavior spec they implement); the kernel module is still to come:
   and TTM eviction-order patches for kernels that lack them. The watcher core
   runs on stock kernels reading sysfs.
 
-### Host-side
+### Host-side (Level 1)
 
-Everything above is about **sharing** a card that already works. These are about
-the machine underneath it — and they are offered on both the NixOS and the
-Arch/CachyOS plane, because a GPU host is not necessarily a NixOS host.
+Everything above is Level 2 / edge — about **sharing** a card that already works.
+These are about the machine underneath it — and they are offered on both the
+NixOS and the Arch/CachyOS plane, because a GPU host is not necessarily a
+NixOS host.
 
 - **`stableDevicePaths`** *(NixOS)* — vendor-keyed `/dev/dri/by-vendor` symlinks,
   so `device-tokens`' paths resolve regardless of DRM enumeration order.

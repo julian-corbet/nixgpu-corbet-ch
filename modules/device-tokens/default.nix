@@ -10,6 +10,11 @@
 # extended resources. We stand on it rather than reinventing a device plugin
 # (nixgpu CONTRACT.md: "stand on industry FOSS; don't reinvent").
 #
+# LEVEL 2 / EDGE (nixidyModules): the co-scheduling half of arbitrating
+# `<host>.gpu.apps` vs `<host>.k3s.gpu.apps` for one Level-1 GPU resource.
+# Never touches the silicon itself -- that's stable-device-paths/toolchain
+# (Level 1, nixosModules/systemManagerModules; see the repo README's "Levels").
+#
 # Generalized from a production single-GPU cluster; this generalized form has
 # not yet been re-verified live.
 { lib, config, ... }:
@@ -120,20 +125,20 @@ in
     nodeSelector = lib.mkOption {
       type = lib.types.attrsOf lib.types.str;
       # NO DEFAULT. The old default was `{ gpu = "amd"; }`, which is not a fact about
-      # GPUs -- it is a fact about ONE fleet's node labels, and it appeared as a default
-      # in five places across three repos, so "this estate is AMD/RDNA2" was being
+      # GPUs -- it is a fact about ONE operator's node labels, and it appeared as a default
+      # in five places across three repos, so "this deployment is AMD/RDNA2" was being
       # asserted by modules with no way to know it. A wrong node selector does not fail
       # loudly: it silently schedules nothing, or schedules onto a node with no card.
       # Requiring it makes the caller state what their labels actually are.
       #
       # Contrast the vendor-ID catalogue in stable-device-paths, which is KEPT: that
-      # `amd = "0x1002"` is a true fact about AMD, not a choice about this fleet. A
+      # `amd = "0x1002"` is a true fact about AMD, not a choice about this deployment. A
       # catalogue may ship facts; a default must not ship someone else's values.
       example = { gpu = "amd"; };
       description = ''
         Node selector restricting the DaemonSet to nodes that actually
         carry the shared GPU. The default assumes a `gpu=amd` node label
-        convention; rename the label/value to whatever your fleet uses to
+        convention; rename the label/value to whatever your cluster uses to
         mark GPU-bearing nodes.
       '';
     };
@@ -190,7 +195,7 @@ in
 
     tolerations = lib.mkOption {
       type = lib.types.listOf lib.types.attrs;
-      default = [ { operator = "Exists"; } ];
+      default = [{ operator = "Exists"; }];
       description = ''
         Pod tolerations. Defaults to tolerate everything (`operator =
         "Exists"` with no key), matching node-critical DaemonSets like

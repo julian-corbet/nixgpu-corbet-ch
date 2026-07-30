@@ -1,5 +1,12 @@
 # nixgpu — the behavior contract
 
+Scope: this contract governs **Level 2 / edge** — arbitrating
+`<host>.gpu.apps` against `<host>.k3s.gpu.apps` for one Level-1 GPU resource
+(see the repo README's "Levels"). It has nothing to say about whether the
+host's toolchain is installed or its device paths are stable — those are
+Level 1 (`stableDevicePaths`, `toolchain`) and are true, or not, independent
+of any sharing at all.
+
 This file is the **fixed target**: *what* a shared single-GPU platform must do.
 The behaviors are the spec; the modules in this repo are one implementation.
 When implementation and contract disagree, the contract wins — and if a goal

@@ -3,6 +3,10 @@
 # the card is full, detects desktop thrash via the global GTT-spill counter in sysfs, and guards the
 # device plugin against the kubelet registration-zombie (squat/generic-device-plugin#63).
 #
+# LEVEL 2 / EDGE (nixidyModules): THE sole active arbiter deciding who wins when
+# `<host>.gpu.apps` (the desktop, read as a synthetic tenant) and `<host>.k3s.gpu.apps`
+# (in-cluster pods) both want the same Level-1 GPU resource. See the repo README's "Levels".
+#
 # Purely reactive: no budgets, no per-job VRAM declaration, no reservation, no toggle. Decisions use
 # MEASURED VRAM (CONTRACT.md B8), priority decides who leaves (B2), the media engine is exempt (B3).
 #
@@ -74,17 +78,19 @@ let
       exit 1
     fi
 
-    # discover the discrete card's sysfs (biggest mem_info_vram_total) under the hostPath-mounted /host/sys
+    # discover the discrete card's sysfs (biggest ${cfg.sysfs.vramTotalAttr}) under the
+    # hostPath-mounted /host/sys. The attribute name is driver-specific (amdgpu by
+    # default) -- see nixgpu.pressureWatcher.sysfs.vramTotalAttr's description.
     CARD=""
     for c in /host/sys/class/drm/card*/device; do
-      [ -r "$c/mem_info_vram_total" ] || continue
-      t=$(cat "$c/mem_info_vram_total" 2>/dev/null); [ "''${t:-0}" -gt 1000000000 ] && CARD="$c"
+      [ -r "$c/${cfg.sysfs.vramTotalAttr}" ] || continue
+      t=$(cat "$c/${cfg.sysfs.vramTotalAttr}" 2>/dev/null); [ "''${t:-0}" -gt 1000000000 ] && CARD="$c"
     done
     [ -n "$CARD" ] && log "watching VRAM+GTT via $CARD" || log "card sysfs not visible here — pod starvation signal only (no desktop spill signal)"
 
     rd(){ cat "$CARD/$1" 2>/dev/null; }
     vfrac(){ [ -z "$CARD" ] && { echo 1; return; }
-      u=$(rd mem_info_vram_used); t=$(rd mem_info_vram_total)
+      u=$(rd ${cfg.sysfs.vramUsedAttr}); t=$(rd ${cfg.sysfs.vramTotalAttr})
       awk "BEGIN{print ($t>0)? $u/$t : 0}"; }
 
     owner_deploy(){ # ns pod -> owning Deployment name (pod -> RS -> Deployment), else empty
@@ -97,7 +103,7 @@ let
     log "gpu-pressure-watcher up on $NODE — reactive kill-lowest-priority (cluster pods + desktop GTT-spill)"
     cd=0                                            # cooldown ticks after a kill: let the reclaimed (pinned) VRAM actually land before re-deciding
     guard_bad=0; guard_cd=0                         # registration-guard state: consecutive zero-ticks + post-bounce cooldown
-    gtt_prev=$([ -n "$CARD" ] && rd mem_info_gtt_used || echo 0); gtt_prev=''${gtt_prev:-0}
+    gtt_prev=$([ -n "$CARD" ] && rd ${cfg.sysfs.gttUsedAttr} || echo 0); gtt_prev=''${gtt_prev:-0}
     while true; do
       f=$(vfrac); press=$(awk "BEGIN{print ($f>$HI)?1:0}")
       # Select GPU pods by LABEL (${cfg.managedLabelKey}=true) so we see EVERY tenant regardless of
@@ -122,7 +128,7 @@ let
       done <<< "$data"
 
       # Desktop tenant: thrash = card full AND graphics spilling to system RAM (gtt_used rising past the noise floor).
-      gtt_now=$([ -n "$CARD" ] && rd mem_info_gtt_used || echo 0); gtt_now=''${gtt_now:-0}
+      gtt_now=$([ -n "$CARD" ] && rd ${cfg.sysfs.gttUsedAttr} || echo 0); gtt_now=''${gtt_now:-0}
       if [ "$press" = 1 ] && [ "$gtt_now" -gt "$(( gtt_prev + GTT_DELTA ))" ]; then
         starve[__desktop__]=$(( ''${starve[__desktop__]:-0} + 1 ))
         [ "''${starve[__desktop__]}" -ge "$GRACE" ] && [ "$DESK_PRIO" -gt "$hi_prio" ] && { hi_prio=$DESK_PRIO; hi_pod="desktop(GTT-spill)"; }
@@ -246,14 +252,14 @@ in
     nodeSelector = lib.mkOption {
       type = lib.types.attrsOf lib.types.str;
       # NO DEFAULT. The old default was `{ gpu = "amd"; }`, which is not a fact about
-      # GPUs -- it is a fact about ONE fleet's node labels, and it appeared as a default
-      # in five places across three repos, so "this estate is AMD/RDNA2" was being
+      # GPUs -- it is a fact about ONE operator's node labels, and it appeared as a default
+      # in five places across three repos, so "this deployment is AMD/RDNA2" was being
       # asserted by modules with no way to know it. A wrong node selector does not fail
       # loudly: it silently schedules nothing, or schedules onto a node with no card.
       # Requiring it makes the caller state what their labels actually are.
       #
       # Contrast the vendor-ID catalogue in stable-device-paths, which is KEPT: that
-      # `amd = "0x1002"` is a true fact about AMD, not a choice about this fleet. A
+      # `amd = "0x1002"` is a true fact about AMD, not a choice about this deployment. A
       # catalogue may ship facts; a default must not ship someone else's values.
       example = { gpu = "amd"; };
       description = "Node selector for the DaemonSet — run the watcher only on GPU nodes.";
@@ -285,6 +291,51 @@ in
         The engine-label value marking media-engine tenants that are never compute victims or
         triggers.
       '';
+    };
+
+    sysfs = {
+      vramTotalAttr = lib.mkOption {
+        type = lib.types.str;
+        default = "mem_info_vram_total";
+        description = ''
+          sysfs attribute name (read from `/host/sys/class/drm/cardN/device/<attr>`)
+          used to both DISCOVER the card (the first `cardN` where this reads > 1 GB
+          is assumed to be the discrete GPU) and as the denominator of the
+          VRAM-full fraction (`hiWater`). This is one of amdgpu's own attribute
+          names, not a DRM-wide standard -- it was a hardware fact hardcoded into
+          the script body with no option at all until this was added. A driver
+          that doesn't expose it under this name (Intel's i915/Xe report VRAM
+          accounting through different files entirely) makes card discovery find
+          nothing: the watcher logs "card sysfs not visible here" and degrades to
+          pod-starvation-only mode (no desktop GTT-spill signal, CONTRACT.md B9) --
+          never a crash, but a silently narrower watcher until this is overridden
+          to that driver's real attribute name.
+        '';
+      };
+
+      vramUsedAttr = lib.mkOption {
+        type = lib.types.str;
+        default = "mem_info_vram_used";
+        description = ''
+          sysfs attribute name for currently-used VRAM -- the numerator of the
+          VRAM-full fraction (`hiWater`). Same amdgpu-specific caveat as
+          `vramTotalAttr`: this is a driver-specific attribute, not a DRM
+          standard.
+        '';
+      };
+
+      gttUsedAttr = lib.mkOption {
+        type = lib.types.str;
+        default = "mem_info_gtt_used";
+        description = ''
+          sysfs attribute name for GTT (system-RAM-backed graphics memory) usage
+          -- the desktop GTT-spill signal (CONTRACT.md B9, gated by `gttDelta`).
+          GTT is a TTM/amdgpu concept specifically; a different in-kernel driver's
+          equivalent counter, if one exists, will live under a different name, and
+          a driver with no GTT-spill concept at all has no correct value to put
+          here (the desktop-thrash signal simply never fires for it).
+        '';
+      };
     };
 
     hiWater = lib.mkOption {

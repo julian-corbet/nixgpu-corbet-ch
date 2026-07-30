@@ -1,7 +1,13 @@
-# priority-ladder — the WHO-YIELDS-FIRST ladder for a shared GPU. Cluster-scoped Kubernetes
-# `PriorityClass` objects (scheduling.k8s.io/v1); no Namespace involved, so this module emits
-# no `namespace`/`createNamespace` for its own resources. Priority here is not a property of an
-# app's *identity* — it is a property of the *intent* under which a pod is submitted right now.
+# priority-ladder — the WHO-YIELDS-FIRST ladder for a shared GPU.
+#
+# LEVEL 2 / EDGE (nixidyModules): defines the ordering the arbiter (pressure-watcher)
+# walks when `<host>.gpu.apps` and `<host>.k3s.gpu.apps` both want the same Level-1
+# GPU resource. A vocabulary, not silicon -- see the repo README's "Levels".
+#
+# Cluster-scoped Kubernetes `PriorityClass` objects (scheduling.k8s.io/v1); no Namespace involved,
+# so this module emits no `namespace`/`createNamespace` for its own resources. Priority here is not
+# a property of an app's *identity* — it is a property of the *intent* under which a pod is
+# submitted right now.
 # The same container image can be launched best-effort (a throwaway interactive render nobody
 # is waiting on) or promoted to `gpu-interactive`/`gpu-desktop` for the duration of a specific
 # job an operator is actively waiting on. This ladder is the vocabulary the platform's pressure

@@ -1,5 +1,10 @@
 # pressure-watcher
 
+**Level 2 / edge** (see the repo README's "Levels"): the sole active arbiter
+deciding who wins when `<host>.gpu.apps` (the desktop, read as a synthetic
+tenant) and `<host>.k3s.gpu.apps` (in-cluster pods) both want the same
+Level-1 GPU resource.
+
 The reactive core of nixgpu: a per-GPU-node DaemonSet (plain bash + kubectl)
 that arbitrates one shared GPU between Kubernetes pods and a desktop session —
 purely from **observed** signals. **No budgets, no reservations**: no tenant
@@ -92,6 +97,9 @@ the field as empty and silently break engine discovery.
 | `managedLabelKey` | str | `"nixgpu.corbet.ch/managed"` | Label key marking every managed GPU tenant (value `"true"`). |
 | `engineLabelKey` | str | `"nixgpu.corbet.ch/engine"` | Label key naming the tenant's GPU engine; value `engineExemptValue` = exempt media engine. |
 | `engineExemptValue` | str | `"vcn"` | Engine-label value marking media-engine tenants that are never compute victims or triggers. |
+| `sysfs.vramTotalAttr` | str | `"mem_info_vram_total"` | sysfs attribute (under `cardN/device/`) read for total VRAM; also used to discover which `cardN` is the discrete GPU. amdgpu-specific name, not a DRM standard — see the option's own description for what a different driver needs. |
+| `sysfs.vramUsedAttr` | str | `"mem_info_vram_used"` | sysfs attribute read for used VRAM (numerator of `hiWater`). Same amdgpu-specific caveat. |
+| `sysfs.gttUsedAttr` | str | `"mem_info_gtt_used"` | sysfs attribute read for GTT usage — the desktop GTT-spill signal (B9). GTT is a TTM/amdgpu concept; a different driver's equivalent, if any, lives under a different name. |
 | `hiWater` | strMatching `[0-9]*\.?[0-9]+` | `"0.85"` | VRAM-full gate, fraction of total (numeric string; non-numeric values fail at eval). Pressure is only "real" above this. |
 | `graceTicks` | int | `2` | Ticks a tenant must stay starved/spilling before a kill (anti-flap). |
 | `killCooldownTicks` | int | `3` | Ticks to wait after a kill for reclaimed VRAM to land before re-deciding (~18s). Lower = faster multi-eviction convergence for a large model needing several lanes freed. |
@@ -120,9 +128,11 @@ the field as empty and silently break engine discovery.
 ```
 
 The DaemonSet runs privileged as root with a read-only hostPath mount of `/sys`
-— that is where the amdgpu `mem_info_vram_*` / `mem_info_gtt_used` counters
-live. If the card's sysfs is not visible, the watcher degrades gracefully to
-the pod-starvation signal only (no desktop spill detection). `NODE_NAME` is
+— that is where the `sysfs.*` counters above live, under amdgpu's own
+attribute names by default. If the card's sysfs is not visible (wrong attribute
+names for a non-amdgpu driver, or no discrete GPU on the node at all), the
+watcher degrades gracefully to the pod-starvation signal only (no desktop
+spill detection). `NODE_NAME` is
 injected via the Downward API; the script refuses to start (logs and exits 1)
 if it is empty rather than guess a node name. The RBAC is the minimal set the
 script uses, replicated verbatim from the source system.
