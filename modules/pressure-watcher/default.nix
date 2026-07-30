@@ -245,7 +245,17 @@ in
 
     nodeSelector = lib.mkOption {
       type = lib.types.attrsOf lib.types.str;
-      default = { gpu = "amd"; };
+      # NO DEFAULT. The old default was `{ gpu = "amd"; }`, which is not a fact about
+      # GPUs -- it is a fact about ONE fleet's node labels, and it appeared as a default
+      # in five places across three repos, so "this estate is AMD/RDNA2" was being
+      # asserted by modules with no way to know it. A wrong node selector does not fail
+      # loudly: it silently schedules nothing, or schedules onto a node with no card.
+      # Requiring it makes the caller state what their labels actually are.
+      #
+      # Contrast the vendor-ID catalogue in stable-device-paths, which is KEPT: that
+      # `amd = "0x1002"` is a true fact about AMD, not a choice about this fleet. A
+      # catalogue may ship facts; a default must not ship someone else's values.
+      example = { gpu = "amd"; };
       description = "Node selector for the DaemonSet — run the watcher only on GPU nodes.";
     };
 
