@@ -233,16 +233,16 @@ in
     assertion = false;
     message = ''
       nixgpu.stableDevicePaths.devices has more than one device for vendor(s):
-      ${toString (lib.attrNames ambiguousVendors)}.
+      ${lib.concatStringsSep ", " (lib.attrNames ambiguousVendors)}.
 
-      A udev rule matches on PCI vendor ID alone (`ATTRS{vendor}=="${lib.concatStringsSep ", " (lib.attrNames ambiguousVendors)}"` has no way to
-      also ask "which card"), so `stableDevicePaths` cannot generate a distinct symlink pair per
-      device when two devices share a vendor -- both cards would end up wearing both symlinks
-      instead of one each. There is no per-device workaround at the `devices` level: fix this by
-      giving the udev rule a second, per-device match condition (PCI bus address / `ID_PATH`),
-      which this module does not yet generate. Until then, either drop `stableDevicePaths.enable`
-      for a host with two same-vendor cards, or keep only one of the conflicting entries in
-      `devices`.
+      A udev rule generated from this inventory matches on PCI vendor ID alone
+      (ATTRS{vendor}=="0x...") -- it has no way to also ask "which card", so stableDevicePaths
+      cannot generate a distinct symlink pair per device when two devices share a vendor: both
+      cards would end up wearing both symlinks instead of one each. There is no per-device fix at
+      the `devices` level; the real fix is a second, per-device match condition the generated
+      rule does not carry yet (the PCI bus address / ID_PATH, not just the vendor ID). Until that
+      exists, either drop `stableDevicePaths.enable` for a host with two same-vendor cards, or
+      keep only one of the conflicting entries in `devices`.
     '';
   };
 }

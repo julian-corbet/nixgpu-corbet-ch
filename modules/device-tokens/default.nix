@@ -59,10 +59,12 @@ let
           is silent at apply time and only surfaces as "the plugin advertises
           devices that don't work" or, worse, "a management/console adapter
           got exposed to workloads". Enable the sibling
-          `nixgpu.nixosModules.stableDevicePaths` on the GPU-bearing host and
-          reference `/dev/dri/by-vendor/<name>-card` / `-render` here instead
-          (the module resolves by PCI vendor ID, not enumeration index — see
-          its own docs). The defaults below do exactly this.
+          `nixgpu.nixosModules.stableDevicePaths` on the GPU-bearing host, declare that host's
+          `nixgpu.stableDevicePaths.devices` (its per-device vendor/PCI-ID/VRAM inventory -- there
+          is no default device, on purpose: see that option's own docs), and reference
+          `/dev/dri/by-vendor/<vendor>-card` / `-render` here instead (the module resolves by PCI
+          vendor ID, not enumeration index). The defaults below assume an `amd` entry exists in
+          that inventory.
         '';
       };
     };
@@ -177,8 +179,11 @@ in
         SEE THE `paths` OPTION DOC ABOVE: the defaults reference the
         vendor-keyed `/dev/dri/by-vendor/amd-*` symlinks, not a numbered
         `/dev/dri/cardN` — enable the sibling `nixgpu.nixosModules.
-        stableDevicePaths` on the GPU-bearing host so these resolve
-        correctly regardless of DRM enumeration order.
+        stableDevicePaths` on the GPU-bearing host AND declare an `amd`
+        device in that host's `nixgpu.stableDevicePaths.devices` inventory
+        so the symlinks these paths reference actually get generated (the
+        vendor map has no default device to fall back on — see that
+        option's own docs for why).
       '';
     };
 

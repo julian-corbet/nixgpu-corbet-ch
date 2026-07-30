@@ -59,7 +59,13 @@ module on the GPU-bearing host** alongside this one:
 # on the NixOS host itself
 { inputs, ... }: {
   imports = [ inputs.nixgpu.nixosModules.stableDevicePaths ];
-  nixgpu.stableDevicePaths.enable = true; # default vendors = { amd = "0x1002"; }
+  nixgpu.stableDevicePaths = {
+    enable = true;
+    # No default device: state the host's actual inventory once, here -- this
+    # is the same fact nixhost's own resources.gpu.<name> would otherwise
+    # duplicate, so there is nothing to hand-type on the vendors/PCI-ID side.
+    devices.gpu0 = { vendor = "amd"; pciId = "0x1002"; vramMiB = 16384; };
+  };
 }
 ```
 
