@@ -162,15 +162,15 @@ observation, not a bench verdict.
 
 This is the first cut of the bench harness: every scenario in the table
 above is implemented and runnable end-to-end against a real cluster with the
-requirements above satisfied. Not yet done, and called out honestly rather
-than silently assumed away:
+requirements above satisfied. It has since been run against a real cluster
+end-to-end — see [RESULTS.md](RESULTS.md) for the transcribed 2026-07-22
+report (a template bug in `tenants/vram-hog.yaml` was found and fixed by that
+first run, then a full S1/S2/S9/S11 sequence passed, S11 included: 600s of
+chaos, 120 generators fired, no invariant violations). Not yet done, and
+called out honestly rather than silently assumed away:
 
 - **S11's ordered-by-priority-class latency percentile report** — the chaos
   loop already logs every fired generator's raw measurements into
   `results.json`; deriving and rendering the percentile-by-class breakdown
   the report should show is a follow-up over that data, not yet wired into
   `emit_report`.
-- The bench has not yet been run against a real cluster end-to-end (this is
-  a freshly-written harness) — treat the first real run of `all` as itself
-  a shakedown of the bench, the same honest posture the rest of this repo
-  takes toward its own generalized modules.

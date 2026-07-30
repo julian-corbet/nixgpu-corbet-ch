@@ -64,9 +64,11 @@ three defaults above stay in place unless a consumer overrides them.
 ## Status
 
 Extracted from a production single-GPU cluster's `PriorityClass` definitions;
-this generalized form has not yet been re-verified live. `PriorityClass` is
-cluster-scoped, so this module emits no namespace of its own — the ladder
-is meant to be applied once per cluster, alongside whatever workload-facing
-namespaces reference it via `priorityClassName`.
+this generalized form has been running live there since it was adopted back
+in-place alongside the other three arbitration modules (see the repo
+README's Status section — all four modules run in production together).
+`PriorityClass` is cluster-scoped, so this module emits no namespace of its
+own — the ladder is meant to be applied once per cluster, alongside
+whatever workload-facing namespaces reference it via `priorityClassName`.
 
 Source lineage: generalized from a production single-GPU cluster.

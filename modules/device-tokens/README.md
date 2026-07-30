@@ -88,8 +88,12 @@ mkEnvs {
 
 ## Status
 
-Generalized from a production single-GPU cluster; the module form has not
-yet been re-verified live end-to-end. The `args` rendering (one `--device`
+Generalized from a production single-GPU cluster; the module form has been
+live-verified end-to-end there — the `rocm-compute` ceiling was raised on the
+real 16 GiB RDNA2 card from 2 to 3 to 16, including a deliberate 18 GiB-of-
+demand stress test at count=16 that held `gpu_reset` at 0 throughout
+(degrading by OOM-retry-loop, never a card reset; see the repo README's
+Status section for the full ledger). The `args` rendering (one `--device`
 flag with a multi-line YAML block per lane) intentionally mirrors the exact
 form the source DaemonSet uses, to avoid an unrelated formatting change
 causing a template diff — and therefore a rolling restart — on infrastructure

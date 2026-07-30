@@ -27,7 +27,9 @@
       # part of either one. They render as nixidy modules (github:arnarg/nixidy),
       # imported into a nixidy env's `modules` list and rendered to manifests for
       # Argo CD (see the sibling nixk3s project for the spine). Extracted from a
-      # production single-GPU cluster; generalized forms not yet re-verified live.
+      # production single-GPU cluster; the generalized forms have been running
+      # live there since 2026-07-22, adopted back in-place — see README.md's
+      # Status section for the verification detail (bench + adversarial stress).
       #
       # All four are arbitration, and none of them uses the GPU: device-tokens
       # advertises the lanes, priority-ladder decides who wins a conflict,

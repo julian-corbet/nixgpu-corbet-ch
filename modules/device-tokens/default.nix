@@ -16,7 +16,9 @@
 # (Level 1, nixosModules/systemManagerModules; see the repo README's "Levels").
 #
 # Generalized from a production single-GPU cluster; this generalized form has
-# not yet been re-verified live.
+# been live-verified there (token ceiling raised 2 -> 3 -> 16 on the real card,
+# including an 18 GiB-of-demand stress test — see modules/device-tokens/README.md
+# and the repo README's Status section).
 { lib, config, ... }:
 let
   cfg = config.nixgpu.deviceTokens;
