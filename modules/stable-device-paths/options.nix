@@ -78,7 +78,7 @@
 # vendors on one host is the easy case (the assertion below is silent for it, and each gets its own
 # unambiguous symlink pair) -- it is included in this file's `example` as data, not wired in as a
 # default, because a public repo's default must not assume any operator's specific hardware.
-{ lib, config, ... }:
+{ lib, config, options, ... }:
 let
   cfg = config.nixgpu.stableDevicePaths;
 
@@ -112,6 +112,16 @@ let
     { }
     cfg.devices;
   ambiguousVendors = lib.filterAttrs (_vendor: count: count > 1) vendorDeviceCounts;
+  # Definitions of `vendors` that did NOT come from this file.
+  #
+  # A `default` counts as a definition and is attributed to the declaring file, so a clean host
+  # already has exactly one -- this module's own `default = derivedVendors`. Filtering by FILE
+  # rather than counting is what distinguishes "derived, as designed" from "somebody assigned it",
+  # and it stays correct if this module ever grows a second internal definition.
+  ownFile = toString ./options.nix;
+  foreignVendorDefs = lib.filter (d: toString d.file != ownFile)
+    options.nixgpu.stableDevicePaths.vendors.definitionsWithLocations;
+
 in
 {
   options.nixgpu.stableDevicePaths = {
@@ -244,7 +254,38 @@ in
   # this file's header for why this is a hard failure rather than a warning -- the whole point of
   # this change is to stop a same-vendor collision from resolving to "whichever card udev
   # processed last" the way the pre-inventory `vendors` map always silently would have.
-  config.assertions = lib.optional (cfg.enable && ambiguousVendors != { }) {
+  # `vendors` is readOnly, but readOnly is enforced at READ time -- the module system raises only
+  # when something actually evaluates the option. The sole reader here is `rules`, which nothing
+  # consumes unless a host plane is active, so on a facts-only host a stray
+  # `stableDevicePaths.vendors.amd = "0xdead"` was silently accepted: the wrong value simply sat
+  # there, unread, until the day someone enabled the module and got a hard error far from the edit
+  # that caused it.
+  #
+  # An EAGER definition count closes that. `options...vendors.definitions` lists only explicit
+  # definitions -- the `default = derivedVendors` is not one -- so a non-empty list means somebody
+  # hand-set a derived option. Ungated on `enable`, deliberately: the point is to catch it on the
+  # host where it was written, not on the host that later reads it.
+  config.assertions = lib.optional (foreignVendorDefs != [ ]) {
+    assertion = false;
+    message = ''
+      nixgpu.stableDevicePaths.vendors was set directly, in:
+      ${lib.concatMapStringsSep "\n      " (d: "- ${toString d.file}") foreignVendorDefs}
+
+      It is a read-only PROJECTION of `stableDevicePaths.devices` and cannot be assigned. It used
+      to be this module's only state, a hand-typed vendor-name -> PCI-ID map, which is exactly the
+      duplication the `devices` inventory replaced -- the same silicon was typeable here and again
+      in nixhost's `resources.gpu`.
+
+      Declare the card in `devices` instead, and this map follows:
+
+        nixgpu.stableDevicePaths.devices.gpu0 = {
+          vendor  = "amd";
+          pciId   = "0x1002";
+          vramMiB = 16384;
+        };
+    '';
+  }
+  ++ lib.optional (cfg.enable && ambiguousVendors != { }) {
     assertion = false;
     message = ''
       nixgpu.stableDevicePaths.devices has more than one device for vendor(s):

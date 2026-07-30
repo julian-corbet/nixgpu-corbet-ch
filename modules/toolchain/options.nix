@@ -27,7 +27,38 @@
 # header called the GPU package names "the one genuinely hard-to-get-right bit and the main reason
 # this profile exists". That was true, and it was the only part worth keeping -- but a GPU runtime
 # is a GPU concern, not an Arch-packaging concern, so it moved here and the profile dissolved.
-{ lib, ... }:
+{ lib, config, ... }:
+let
+  # Canonical PCI vendor IDs for the vendors this module's enum dispatches on. Catalogue facts
+  # about the hardware, not a choice: these are what `/sys/class/drm/cardN/device/vendor` reports.
+  #
+  # Needed because `vendor` here and `stableDevicePaths.devices.<name>.vendor` are two DIFFERENT
+  # vocabularies on purpose -- this one is a closed enum because this module dispatches on it to
+  # pick a runtime, while the inventory's is free-form because it only groups devices that share
+  # silicon and belongs to the operator ("amd", "AMD", "radeon" are all fine there). So the two
+  # cannot be compared as strings; they are reconciled through the PCI ID, which is the one stable
+  # identity both sides ultimately mean.
+  toolchainPciIds = {
+    amd = "0x1002";
+    intel = "0x8086";
+    nvidia = "0x10de";
+  };
+
+  # Read DEFENSIVELY: stableDevicePaths may not be imported at all, and this module must not
+  # require it. An empty inventory means "no facts to check against", never a failure.
+  inventory = config.nixgpu.stableDevicePaths.devices or { };
+  inventoryPciIds = lib.mapAttrsToList (_: d: d.pciId) inventory;
+
+  wantedPciId = if config.nixgpu.toolchain.vendor == null then null
+  else toolchainPciIds.${config.nixgpu.toolchain.vendor} or null;
+
+  # Only a real contradiction: both sides declared, and the vendor this host wants a runtime for
+  # has no card in the host's own inventory.
+  vendorContradiction =
+    wantedPciId != null
+    && inventory != { }
+    && !(lib.elem wantedPciId inventoryPciIds);
+in
 {
   options.nixgpu.toolchain = {
     enable = lib.mkEnableOption ''
@@ -84,5 +115,41 @@
         is the consumer's problem -- the tables above stay curated.
       '';
     };
+  };
+
+  # ── The one cross-check ─────────────────────────────────────────────────────────────────────
+  #
+  # `vendor` above and `stableDevicePaths.devices.<name>.vendor` are two statements about the same
+  # silicon, and until this assertion existed nothing compared them: `toolchain.vendor = "nvidia"`
+  # beside an inventory containing only `pciId = "0x1002"` evaluated completely clean, and the host
+  # installed CUDA for a card it does not have.
+  #
+  # NOT gated on either module's `enable`. Both are fact declarations that other repos mirror
+  # (nixhost reads the inventory as `resources.gpu`), so an incoherent pair is wrong data whether or
+  # not this host ever installs a runtime or generates a udev rule. Gating a coherence check on a
+  # mechanism switch is what left the same-vendor refusal and the `vendors` readOnly guard inert on
+  # facts-only hosts.
+  #
+  # Silent whenever either side is absent -- no inventory, or no vendor -- because then there is
+  # genuinely nothing to contradict. This is a coherence check, not a completeness requirement: a
+  # host may legitimately declare a compute vendor with no inventory at all.
+  config.assertions = lib.optional vendorContradiction {
+    assertion = false;
+    message = ''
+      nixgpu.toolchain.vendor = "${config.nixgpu.toolchain.vendor}" wants the
+      ${config.nixgpu.toolchain.vendor} compute runtime (PCI vendor ${wantedPciId}), but
+      nixgpu.stableDevicePaths.devices lists no device with that PCI vendor ID.
+
+      Declared inventory: ${lib.concatStringsSep ", " (lib.mapAttrsToList (n: d: "${n} = ${d.pciId}") inventory)}
+
+      These are two statements about the same silicon and they disagree. One of them is a typo --
+      most often a host declaration copy-pasted from a machine with a different card, where the
+      inventory was updated for the new hardware and the toolchain vendor was not, or the reverse.
+
+      Note the two fields use different vocabularies deliberately, so they are compared by PCI ID,
+      not by name: `toolchain.vendor` is a closed enum this module dispatches on to pick a runtime,
+      while `devices.<name>.vendor` is the operator's own free-form grouping word. Fix whichever of
+      the two is wrong about the hardware; do not rename a device to match.
+    '';
   };
 }

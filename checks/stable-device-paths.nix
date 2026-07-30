@@ -21,6 +21,25 @@ let
     modules = [ stubs ../modules/stable-device-paths/options.nix { nixgpu.stableDevicePaths = settings; } ];
   };
 
+  # Both fact modules together, which is how a real host declares them -- the vendor cross-check
+  # spans the two.
+  evalBoth = settings: lib.evalModules {
+    modules = [
+      stubs
+      ../modules/stable-device-paths/options.nix
+      ../modules/toolchain/options.nix
+      settings
+    ];
+  };
+
+  refusedBoth = settings:
+    let
+      r = builtins.tryEval (builtins.deepSeq
+        (evalBoth settings).config.assertions
+        (lib.filter (a: !a.assertion) (evalBoth settings).config.assertions));
+    in
+    !r.success || r.value != [ ];
+
   # Forces the inventory deeply, so a type error cannot hide behind laziness.
   accepts = settings:
     (builtins.tryEval (builtins.deepSeq
@@ -49,6 +68,22 @@ let
         in if r.success then r.value else [ ];
     in
     !v.success || failedAssertions != [ ];
+
+  # Failed assertions ONLY -- deliberately never forces `vendors`.
+  #
+  # `refused` above reads the derived map, which makes `readOnly` throw whenever a foreign
+  # definition exists -- so it reports "refused" for a hand-set map even with the EAGER guard
+  # disabled, and cannot tell the two apart. That is the exact defect the eager guard exists to
+  # close (readOnly fires only at read time, and a facts-only host never reads), so testing it
+  # requires a probe that reads nothing but the assertion list. Caught by disabling the guard and
+  # watching the naive test still pass.
+  assertionFailures = settings:
+    let
+      r = builtins.tryEval (builtins.deepSeq
+        (eval settings).config.assertions
+        (lib.filter (a: !a.assertion) (eval settings).config.assertions));
+    in
+    if r.success then r.value else [ { message = "eval threw"; } ];
 
   amd = { vendor = "amd"; pciId = "0x1002"; vramMiB = 16384; };
   ast = { vendor = "aspeed"; pciId = "0x1a03"; vramMiB = 64; };
@@ -118,6 +153,48 @@ let
           gpu0 = amd;
           gpu1 = amd // { vramMiB = 8192; };
         };
+      });
+
+    # ── vendors is a projection, not a setting (eager, ungated) ─────────────────────────────
+    # readOnly alone fires only when something READS the option, and on a facts-only host nothing
+    # does -- so a stray assignment sat unread until someone enabled the module later.
+    "hand-setting the derived vendors map is refused WITHOUT reading it" =
+      assertionFailures { vendors.amd = "0xdead"; } != [ ];
+    "it is refused even when the assigned value matches what would be derived" =
+      assertionFailures { devices.gpu0 = amd; vendors.amd = "0x1002"; } != [ ];
+    "a normal inventory does not trip the projection guard" =
+      assertionFailures { devices.gpu0 = amd; } == [ ];
+    "an empty config does not trip the projection guard" =
+      assertionFailures { } == [ ];
+
+    # ── toolchain.vendor vs the inventory, compared by PCI ID ───────────────────────────────
+    # The two fields use different vocabularies on purpose, so they reconcile through pciId.
+    "a toolchain vendor with no matching card is refused" =
+      refusedBoth {
+        nixgpu.toolchain.vendor = "nvidia";
+        nixgpu.stableDevicePaths.devices.gpu0 = amd;
+      };
+    "a toolchain vendor WITH a matching card is accepted" =
+      !(refusedBoth {
+        nixgpu.toolchain.vendor = "amd";
+        nixgpu.stableDevicePaths.devices.gpu0 = amd;
+      });
+    # Free-form inventory naming must not break the match -- it is by pciId, never by name.
+    "a differently-named but PCI-matching card is accepted" =
+      !(refusedBoth {
+        nixgpu.toolchain.vendor = "amd";
+        nixgpu.stableDevicePaths.devices.gpu0 = amd // { vendor = "radeon"; };
+      });
+    # Silent when either side is absent: coherence check, not a completeness requirement.
+    "a toolchain vendor with no inventory at all is accepted" =
+      !(refusedBoth { nixgpu.toolchain.vendor = "amd"; });
+    "an inventory with no toolchain vendor is accepted" =
+      !(refusedBoth { nixgpu.stableDevicePaths.devices.gpu0 = amd; });
+    # The real devhome shape: ASPEED framebuffer + AMD card, toolchain wants AMD.
+    "an ASPEED framebuffer beside the matching AMD card is accepted" =
+      !(refusedBoth {
+        nixgpu.toolchain.vendor = "amd";
+        nixgpu.stableDevicePaths.devices = { gpu0 = amd; ast = ast; };
       });
   };
 
