@@ -73,7 +73,7 @@ mkEnvs {
       nixgpu.deviceTokens = {
         enable = true;
         project = "platform"; # map to your Argo AppProject for device infra
-        # nodeSelector, devices, etc. left at defaults, or overridden per fleet
+        # nodeSelector, devices, etc. left at defaults, or overridden per cluster
       };
     }
   ];

@@ -7,7 +7,7 @@ bench implements every automatable behavior as a scenario with a pass/fail
 verdict, and gives the one operational behavior that needs a human (B9, the
 desktop) a clearly-marked manual mode instead of pretending to automate it.
 
-This is a **template harness**, not a fleet-specific test suite: every
+This is a **template harness**, not a cluster-specific test suite: every
 endpoint, namespace, model name, and image reference is a `bench.env`
 variable (see `bench.env.example`) — nothing here points at any real cluster.
 You bring the cluster; this repo brings the procedure.

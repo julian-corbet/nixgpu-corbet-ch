@@ -47,7 +47,7 @@ proxies a guess, and never leaks which apps exist behind it via error content.
 ## Building `caddyImage`
 
 There is no default `caddyImage` because stock Caddy does not ship the `sablier` plugin — shipping
-any concrete image reference here would be a fleet-specific value pretending to be generic. Build
+any concrete image reference here would be an operator-specific value pretending to be generic. Build
 one with `xcaddy`/nix, e.g.:
 
 ```nix

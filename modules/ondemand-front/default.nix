@@ -1,5 +1,10 @@
 # ondemand-front — the user-facing half of scale-to-zero on a shared GPU: the honest waiting page.
 #
+# LEVEL 2 / EDGE (nixidyModules): the announcement half of arbitrating
+# `<host>.gpu.apps` vs `<host>.k3s.gpu.apps` -- cold start, GPU contention, and
+# desktop-in-use are all "the other branch has the card right now" from a
+# fronted app's point of view. See the repo README's "Levels".
+#
 # THE JOB: a card shared by a handful of infrequent, scale-to-zero apps (+ maybe a desktop session
 # living outside k8s) means a sleeping app must wake on first request, and it may then WAIT for the
 # GPU — because another app currently holds it (queueing / model-swap) or because a desktop session
@@ -112,7 +117,7 @@ in
       type = lib.types.str;
       description = ''
         Caddy image with the sablier plugin COMPILED IN. There is no default: stock Caddy does not
-        have this plugin, and shipping a real registry reference here would be a fleet-specific
+        have this plugin, and shipping a real registry reference here would be an operator-specific
         value pretending to be a generic default. Build one yourself — see the README for the
         `caddy.withPlugins` recipe — and point this at the result (a nix-built image imported
         directly into the cluster's container runtime, or a real registry push; either way the
