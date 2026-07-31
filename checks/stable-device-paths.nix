@@ -42,10 +42,20 @@ let
     in
     !r.success || r.value != [ ];
 
-  # Forces the inventory deeply, so a type error cannot hide behind laziness.
+  # Forces the inventory deeply, MINUS `cardPath`/`renderPath` -- so a device's this-devices'-shape
+  # correctness ("is `vendor`/`pciId`/`vramMiB`/... well-formed") stays a separate question from
+  # "does a *derived path* resolve", which is the whole point of `cardPath` throwing lazily when
+  # `address` is unset (see options.nix's own comment on that default). Every existing case below
+  # declares no `address`, so a naive `deepSeq` over the untouched submodule would force that throw
+  # on every one of them and report a well-formed device as REJECTED -- discovered by exactly that
+  # regression the first time `accepts` was pointed at a device with `cardPath` added and no
+  # `address` set.
+  devicesSansPaths = settings:
+    lib.mapAttrs (_name: d: builtins.removeAttrs d [ "cardPath" "renderPath" ])
+      (eval settings).config.nixgpu.stableDevicePaths.devices;
+
   accepts = settings:
-    (builtins.tryEval (builtins.deepSeq
-      (eval settings).config.nixgpu.stableDevicePaths.devices "ok")).success;
+    (builtins.tryEval (builtins.deepSeq (devicesSansPaths settings) "ok")).success;
 
   # Forces the DERIVED map.
   vendorsOf = settings:
@@ -58,8 +68,17 @@ let
   # that never reads it is checking the inventory and not the thing the inventory is for.
   rulesOf = settings: (eval settings).config.nixgpu.stableDevicePaths.rules;
 
-  # One device's resolved submodule, for the per-bus defaults.
+  # One device's resolved submodule, for the per-bus defaults. Deliberately UNFORCED (a plain
+  # attribute fetch, not a `deepSeq`) -- callers dereference exactly the field they want to test,
+  # which is what lets `.cardPath`/`.renderPath` be tested for BOTH "resolves to X" and "throws"
+  # without the fetch itself pre-empting either outcome.
   deviceOf = settings: name: (eval settings).config.nixgpu.stableDevicePaths.devices.${name};
+
+  # Whether forcing a specific field of one device throws. Used for `cardPath`/`renderPath`'s
+  # "throws when `address` is unset" behavior, which `accepts` (by design, see `devicesSansPaths`)
+  # never exercises.
+  throwsOn = settings: name: field:
+    !(builtins.tryEval (deviceOf settings name).${field}).success;
 
   # Whether the config would be REFUSED on a real host -- either because reading the derived map
   # throws, or because a `config.assertions` entry is false.
@@ -307,6 +326,82 @@ let
       assertionFailures { devices.gpu0 = amd; } == [ ];
     "an empty config does not trip the projection guard" =
       assertionFailures { } == [ ];
+
+    # ── address / cardPath / renderPath: the by-path physical-location facts ────────────────
+    #
+    # `address` is optional -- see options.nix's header for why -- so an inventory that never
+    # sets it must still evaluate cleanly, INCLUDING through `accepts`, which is what
+    # `devicesSansPaths` above exists to guarantee.
+    "address defaults to null and does not prevent acceptance" =
+      (deviceOf { devices.gpu0 = amd; } "gpu0").address == null
+      && accepts { devices.gpu0 = amd; };
+
+    # Both bus forms, checked against the EXACT spellings read live off this estate's hosts
+    # (`ls -l /dev/dri/by-path/`: `pci-0000:0a:00.0-card`, `pci-0000:0a:00.0-render`,
+    # `platform-evdi.0-card`) -- not a format this check invents.
+    "a PCI device's cardPath is the exact live by-path spelling" =
+      (deviceOf { devices.gpu0 = amd // { address = "0000:0a:00.0"; }; } "gpu0").cardPath
+        == "/dev/dri/by-path/pci-0000:0a:00.0-card";
+    "a PCI device's renderPath is the exact live by-path spelling" =
+      (deviceOf { devices.gpu0 = amd // { address = "0000:0a:00.0"; }; } "gpu0").renderPath
+        == "/dev/dri/by-path/pci-0000:0a:00.0-render";
+    "a platform device's cardPath is the exact live by-path spelling" =
+      (deviceOf { devices.evdi = evdi // { address = "evdi.0"; }; } "evdi").cardPath
+        == "/dev/dri/by-path/platform-evdi.0-card";
+
+    # renderPath is null exactly when hasRenderNode is false -- a permanent driver fact, not an
+    # error -- even though `address` IS set (evdi can never have a render node, on any host).
+    "renderPath is null when hasRenderNode is false, even with address set" =
+      (deviceOf { devices.evdi = evdi // { address = "evdi.0"; }; } "evdi").renderPath == null;
+    "renderPath is null for a display-only PCI device with address set" =
+      (deviceOf { devices.ast = ast // { address = "0000:05:00.0"; hasRenderNode = false; }; } "ast").renderPath
+        == null;
+
+    # The read-time enforcement itself: forcing cardPath/renderPath without an address throws,
+    # rather than silently returning some other value -- "address is present whenever anything
+    # reads cardPath" as a live check (see cardPath's own description for why this cannot be a
+    # static `config.assertions` entry).
+    "cardPath throws when address is unset" =
+      throwsOn { devices.gpu0 = amd; } "gpu0" "cardPath";
+    "renderPath throws when address is unset and hasRenderNode is true" =
+      throwsOn { devices.gpu0 = amd; } "gpu0" "renderPath";
+    # ...but NOT when hasRenderNode is false: there is nothing to throw about, the answer is
+    # simply null regardless of address.
+    "renderPath does NOT throw when hasRenderNode is false, address or not" =
+      !(throwsOn { devices.evdi = evdi; } "evdi" "renderPath");
+
+    # The type: each shape is well-formed for SOME bus, but a malformed string matches neither and
+    # must be rejected regardless of which bus it is attached to.
+    "a malformed address (neither PCI nor platform shaped) is rejected by the type" =
+      !(accepts { devices.gpu0 = amd // { address = "not-an-address"; }; })
+      && !(accepts { devices.evdi = evdi // { address = "not-an-address"; }; });
+    "a PCI address missing its function suffix is rejected by the type" =
+      !(accepts { devices.gpu0 = amd // { address = "0000:0a:00"; }; });
+    "a PCI address with an out-of-range function digit is rejected by the type" =
+      !(accepts { devices.gpu0 = amd // { address = "0000:0a:00.8"; }; });
+    "a platform address with no instance number is rejected by the type" =
+      !(accepts { devices.evdi = evdi // { address = "evdi"; }; });
+
+    # A well-formed address of the CORRECT shape for its own bus is simply accepted.
+    "a correctly-shaped PCI address is accepted" =
+      accepts { devices.gpu0 = amd // { address = "0000:0a:00.0"; }; };
+    "a correctly-shaped platform address is accepted" =
+      accepts { devices.evdi = evdi // { address = "evdi.0"; }; };
+
+    # The bus/address cross-check: a string that is well-formed for the OTHER bus still passes the
+    # type (the type cannot see `bus`), so this has to be an assertion, not a type failure --
+    # `accepts` would report these as fine; `refused` is what actually catches them.
+    "a PCI-shaped address on a platform device is refused" =
+      refused { devices.evdi = evdi // { address = "0000:0a:00.0"; }; };
+    "a platform-shaped address on a PCI device is refused" =
+      refused { devices.gpu0 = amd // { address = "evdi.0"; }; };
+    "matching shapes to their own bus does not trip the mismatch assertion" =
+      !(refused {
+        devices = {
+          gpu0 = amd // { address = "0000:0a:00.0"; };
+          evdi = evdi // { address = "evdi.0"; };
+        };
+      });
 
     # ── toolchain.vendor vs the inventory, compared by PCI ID ───────────────────────────────
     # The two fields use different vocabularies on purpose, so they reconcile through pciId.

@@ -54,6 +54,25 @@
 # inventory entry describes the driver's devices as a class; that is the honest shape, and the
 # `by-driver` symlink is a convenience for the single-device case, never an identity for N.
 #
+# ── A THIRD IDENTITY: `address`, for a consumer that must resolve at NIX EVAL TIME ─────────────
+#
+# `vendor`/`pciId` and `driver` above name the SILICON or the DRIVER -- exactly why two same-vendor
+# or same-driver devices cannot get distinct `by-vendor`/`by-driver` symlinks (see the ambiguity
+# assertions below). `address` names the SLOT instead: a PCI domain:bus:device.function or a
+# platform device name, fixed at build/install time and never shared by two devices even when the
+# silicon is identical.
+#
+# This is not an alternative spelling of the same problem `by-vendor`/`by-driver` solve -- it is
+# for a DIFFERENT consumer shape. A systemd unit's `DeviceAllow=` and a compositor's own config file
+# (niri reads its config from disk; it does not read a launcher's environment) are both rendered at
+# Nix EVAL TIME, before any kernel has enumerated anything, so neither can defer to a udev property
+# lookup at runtime the way an application opening `/dev/dri/by-vendor/amd-card` can. `address` is
+# knowable at eval time (it is a physical slot, not a probe-order artifact), and it is exactly what
+# systemd-udev's OWN built-in rules already key a `/dev/dri/by-path/*` symlink on -- so `cardPath`/
+# `renderPath` below only have to REPRODUCE that spelling as a Nix string, not generate a rule for
+# it. Verified live: `ls -l /dev/dri/by-path/` shows `pci-0000:0a:00.0-card` and
+# `platform-evdi.0-card` with zero rules of this repo's own involved.
+#
 # Options only -- the NixOS and system-manager planes each consume `rules` in their own way. Both
 # planes exist because a GPU host is not necessarily a NixOS host: an Arch/CachyOS laptop with one
 # real card hits the identical renumbering hazard the moment a dock is plugged in.
@@ -64,6 +83,18 @@
 { lib, config, options, ... }:
 let
   cfg = config.nixgpu.stableDevicePaths;
+
+  # ── Physical-location address patterns, shared by the `address` option's type below and the
+  # per-bus mismatch assertion -- one definition, so the two can never drift apart ─────────────
+  #
+  # PCI: 4-hex domain : 2-hex bus : 2-hex device . function. Function is genuinely a 3-bit field in
+  # PCI config space -- only 0-7 is ever a real device, so the pattern says so instead of accepting
+  # any hex digit and letting a typo like ".a" pass as "well-formed".
+  pciAddressPattern = "[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\\.[0-7]";
+  # Platform: the driver's own name (same shape as `driver` below -- it usually IS that name)
+  # plus the dot-separated instance number the platform-bus core assigns ("evdi.0", "evdi.1" for a
+  # second dock).
+  platformAddressPattern = "[a-z0-9][a-z0-9_-]*\\.[0-9]+";
 
   # ── The two buses, split once here and used by everything below ─────────────────────────────
   #
@@ -157,6 +188,23 @@ let
   # pinned is the device that will still renumber.
   platformWithPciFields = lib.attrNames (lib.filterAttrs (_n: d: d.vendor != null || d.pciId != null) platformDevices);
 
+  # `address`'s type (below) only proves "shaped like a PCI address OR a platform name" -- it
+  # cannot also prove "the shape matches THIS device's `bus`", because a type has no way to read a
+  # sibling field. A PCI-shaped string on a platform device (or the reverse) therefore passes the
+  # type and needs its own check here, same division of labor as the required-field lists above.
+  # Ungated on `enable` for the same reason those are: this is inventory correctness, true or
+  # false independent of whether any host plane ever reads a path from it. Reads only `.address`
+  # and `.bus` -- never `.cardPath`/`.renderPath` -- so computing this never trips those two
+  # options' lazy throws (see their own descriptions for why they throw at all).
+  addressBusMismatch = lib.attrNames (lib.filterAttrs
+    (_name: d:
+      d.address != null && (
+        if d.bus == "pci"
+        then builtins.match pciAddressPattern d.address == null
+        else builtins.match platformAddressPattern d.address == null
+      ))
+    cfg.devices);
+
   # Definitions of `vendors` that did NOT come from this file.
   #
   # A `default` counts as a definition and is attributed to the declaring file, so a clean host
@@ -173,7 +221,7 @@ in
     enable = lib.mkEnableOption "stable /dev/dri symlinks (card + render), so device paths survive a DRM re-enumeration";
 
     devices = lib.mkOption {
-      type = lib.types.attrsOf (lib.types.submodule ({ config, ... }: {
+      type = lib.types.attrsOf (lib.types.submodule ({ name, config, ... }: {
         options = {
           bus = lib.mkOption {
             type = lib.types.enum [ "pci" "platform" ];
@@ -328,6 +376,120 @@ in
               text and not an enum: the moment it became an enum something would start
               dispatching on it, and device POLICY -- who may use which card -- belongs to the
               consumer that claims the device, not to the table that records it exists.
+            '';
+          };
+
+          address = lib.mkOption {
+            # A single alternation covering both valid SHAPES (PCI domain:bus:device.function, or
+            # a platform device name) -- the type can prove "well-formed for SOME bus" but not
+            # "well-formed for THIS device's bus" (that would need to read the sibling `bus`
+            # field, which a type cannot do), so the per-bus cross-check is the
+            # `addressBusMismatch` assertion below, not this type.
+            type = lib.types.nullOr (lib.types.strMatching "(${pciAddressPattern})|(${platformAddressPattern})");
+            default = null;
+            example = "0000:0a:00.0";
+            description = ''
+              The stable PHYSICAL LOCATION of this device: a PCI domain:bus:device.function
+              (`"0000:0a:00.0"`) for `bus = "pci"`, or a platform device name (`"evdi.0"`) for
+              `bus = "platform"`. This is a different identity from `vendor`/`pciId`/`driver`
+              above, which name the SILICON or the DRIVER -- exactly why two same-vendor or
+              same-driver devices cannot get distinct `by-vendor`/`by-driver` symlinks (see the
+              ambiguity assertions below). A bus address names the SLOT, which never collides even
+              when two devices are identical silicon.
+
+              WHY THIS EXISTS: a consumer that must name a device to the KERNEL -- a systemd
+              unit's `DeviceAllow=`, or a compositor's own config file -- cannot use a card
+              NUMBER, because DRM minors are enumeration order and that order moves (see this
+              file's header). It also cannot defer the name to RUNTIME: both a systemd unit and a
+              compositor config (niri reads its config from disk, never a launcher's environment)
+              are rendered at Nix EVAL TIME, before any kernel has enumerated anything, so there
+              is no later moment for either of them to resolve a device by a udev property
+              lookup. `address` breaks that deadlock -- it is knowable at eval time, because it is
+              a physical slot fixed at build/install time, not a probe-order artifact.
+
+              Optional, and null by default: an inventory that only needs the pre-existing
+              `by-vendor`/`by-driver` symlinks never has to state this, and `cardPath`/
+              `renderPath` below are simply never read in that case. Set it only on a device that
+              something downstream needs to name by kernel path.
+            '';
+          };
+
+          cardPath = lib.mkOption {
+            # Plain `str`, not `nullOr str`: unlike `renderPath`, there is no bus/driver fact that
+            # legitimately makes a card path absent (every DRM device has a `card*` node) -- the
+            # only reason this could not be computed is a missing `address`, and that is an input
+            # error, not a hardware fact, so it throws instead of returning null. See the `default`
+            # below for why the throw is deferred to READ time.
+            type = lib.types.str;
+            readOnly = true;
+            default =
+              if config.address == null then
+                throw ''
+                  nixgpu.stableDevicePaths.devices.${name}.cardPath was read, but this device
+                  declares no `address`. cardPath is derived from `address` + `bus` alone -- there
+                  is nothing else stable enough to build a /dev/dri/by-path/* spelling from (a
+                  card NUMBER is exactly what this whole module exists to avoid hardcoding, and
+                  `vendor`/`driver` name the silicon or the driver, not the slot). Set
+                  nixgpu.stableDevicePaths.devices.${name}.address to this device's PCI
+                  domain:bus:device.function or platform device name.
+                ''
+              else if config.bus == "pci" then
+                "/dev/dri/by-path/pci-${config.address}-card"
+              else
+                "/dev/dri/by-path/platform-${config.address}-card";
+            description = ''
+              The stable `/dev/dri/by-path/*-card` symlink for this device, derived from
+              `address` + `bus`. NOT generated by this module -- systemd-udev's own built-in rules
+              already create this symlink for every DRM device from the same physical-location
+              facts (verified live: `ls -l /dev/dri/by-path/` shows `pci-0000:0a:00.0-card` and
+              `platform-evdi.0-card` with zero rules of this repo's own involved). This option
+              exists so a consumer gets the exact spelling as a Nix VALUE at eval time -- a string
+              it can put straight into a `DeviceAllow=` or a compositor config -- instead of
+              re-deriving the `pci-`/`platform-` prefix and the `-card` suffix convention itself,
+              which is exactly the kind of formatting detail that drifts between call sites if two
+              consumers guess it independently.
+
+              readOnly, and THROWS if forced while `address` is unset, rather than falling back to
+              null -- see this option's `default` and `address`'s own description for why. This
+              is the same lazy-enforcement idiom `vendors` below already relies on: the failure
+              fires only when something actually dereferences `cardPath`, so an inventory that
+              never sets `address` (and never reads this) still evaluates cleanly. It is, in
+              effect, "address is present whenever anything reads cardPath" as a live check
+              instead of a static one -- no `config.assertions` entry can express it, because
+              whether anything reads `cardPath` is a fact about the CONSUMER, not about this
+              module.
+            '';
+          };
+
+          renderPath = lib.mkOption {
+            type = lib.types.nullOr lib.types.str;
+            readOnly = true;
+            default =
+              if !config.hasRenderNode then
+                null
+              else if config.address == null then
+                throw ''
+                  nixgpu.stableDevicePaths.devices.${name}.renderPath was read, but this device
+                  declares no `address` (and `hasRenderNode` is true, so a render path DOES exist
+                  to name -- this is not the "no render node at all" case, see this option's
+                  `null` branch). Set nixgpu.stableDevicePaths.devices.${name}.address; see
+                  `cardPath`'s description for the expected shape.
+                ''
+              else if config.bus == "pci" then
+                "/dev/dri/by-path/pci-${config.address}-render"
+              else
+                "/dev/dri/by-path/platform-${config.address}-render";
+            description = ''
+              The `/dev/dri/by-path/*-render` counterpart of `cardPath`. `null` -- not a throw --
+              exactly when `hasRenderNode` is false: that is a real, permanent fact about the
+              driver (evdi's `drm_driver` never sets `DRIVER_RENDER`; an ASPEED BMC framebuffer is
+              `DRIVER_GEM | DRIVER_MODESET` and no more), so there is no render node for any
+              address to name, on any host, ever -- returning null states that honestly, the same
+              way `rules` skips the `renderD*` udev rule for these devices below.
+
+              Throws exactly like `cardPath`, and for the same reason, when `hasRenderNode` is
+              true but `address` is unset: that combination means a render path DOES exist and
+              this option simply was not given enough to spell it.
             '';
           };
         };
@@ -548,6 +710,21 @@ in
       nothing matches it, which is precisely the silent failure this module exists to remove.
 
       Drop them and keep `driver`, or change `bus` to `"pci"` if this really is a PCI device.
+    '';
+  }
+  ++ lib.optional (addressBusMismatch != [ ]) {
+    assertion = false;
+    message = ''
+      nixgpu.stableDevicePaths.devices entr(ies) ${lib.concatStringsSep ", " addressBusMismatch}
+      declare an `address` whose SHAPE does not match their own `bus`.
+
+      A PCI device's address is a domain:bus:device.function (e.g. "0000:0a:00.0"); a platform
+      device's is a driver name plus instance (e.g. "evdi.0"). The `address` type accepts either
+      shape -- it has no way to read this device's own `bus` field -- so a value well-formed for
+      the OTHER bus still passes the type, and would silently produce the wrong `pci-`/`platform-`
+      prefix in `cardPath`/`renderPath` for the device it is actually meant to name.
+
+      Fix the address to match this device's `bus`, or fix `bus` if that is the one that is wrong.
     '';
   };
 }
