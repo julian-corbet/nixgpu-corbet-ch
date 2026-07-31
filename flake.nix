@@ -11,12 +11,31 @@
       url = "github:arnarg/nixidy";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+
+    # nixhost is an input for EXACTLY ONE THING: `lib.probeFact` (`lib/facts.nix`) -- the shared,
+    # plain-function fix for the cross-namespace defensive-read defect class, where a bare
+    # `config.nixfoo.bar or fallback` cannot tell "nixfoo is not composed here" (legitimate,
+    # silent) from "nixfoo IS composed but `bar` moved, was renamed, or its value was rejected by
+    # its own type" (a defect that hides exactly as silently). The one place this repo has such a
+    # read is modules/displaylink/system-manager.nix, asking whether nixarch's package reconciler
+    # is actually enabled -- see that file's header for why that single fact is worth an input.
+    #
+    # nixhost is the namespace hub, not a sibling domain, and this stays a one-way edge: nixhost
+    # reads THIS repo's device inventory through the same `probeFact`, and takes no flake input on
+    # nixgpu to do it. Closed over in the module outputs below as a plain function argument, never
+    # `_module.args`, so a consumer importing a module here sees an ordinary module function and
+    # never needs to know `probeFact` exists.
+    nixhost = {
+      url = "github:julian-corbet/nixhost-corbet-ch";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
-  outputs = { self, nixpkgs, nixidy }:
+  outputs = { self, nixpkgs, nixidy, nixhost }:
     let
       systems = [ "x86_64-linux" ];
       forAllSystems = f: nixpkgs.lib.genAttrs systems f;
+      inherit (nixhost.lib) probeFact;
     in
     {
       # LEVEL 2 / EDGE modules (nixhost vocabulary: an `environments.<name>` is
@@ -55,11 +74,12 @@
       # card is still a GPU host, and until `toolchain` landed this project had
       # nothing at all to say to one.
       nixosModules = {
-        # vendor-keyed /dev/dri/by-vendor symlinks -- see modules/stable-device-paths/.
-        # Host-side counterpart to device-tokens' `paths`: enable this on any node running that
-        # module so its default paths resolve correctly regardless of DRM enumeration order.
-        # Offered on BOTH planes (see systemManagerModules below) -- an Arch laptop with a single
-        # card hits the identical hazard the moment a DisplayLink dock adds an `evdi` node.
+        # The host's COMPLETE DRM device inventory + stable /dev/dri symlinks generated from it --
+        # see modules/stable-device-paths/. Host-side counterpart to device-tokens' `paths`: enable
+        # this on any node running that module so its default paths resolve correctly regardless of
+        # DRM enumeration order. Offered on BOTH planes (see systemManagerModules below) -- an Arch
+        # laptop with a single card hits the identical hazard the moment a DisplayLink dock adds an
+        # `evdi` node.
         stableDevicePaths = { ... }: {
           imports = [ ./modules/stable-device-paths/options.nix ./modules/stable-device-paths/nixos.nix ];
         };
@@ -67,6 +87,19 @@
         # The vendor compute runtime (CUDA / ROCm / oneAPI class), resolved to nixpkgs attributes.
         toolchain = { ... }: {
           imports = [ ./modules/toolchain/options.nix ./modules/toolchain/nixos.nix ];
+        };
+
+        # evdi: the virtual DRM device a DisplayLink dock draws through. A GPU-contention fact,
+        # not a peripheral -- it takes DRM minors and renumbers every card probed after it.
+        evdi = { ... }: {
+          imports = [ ./modules/evdi/options.nix ./modules/evdi/nixos.nix ];
+        };
+
+        # DisplayLinkManager: evdi's proprietary userland. A SEPARATE module from `evdi` on
+        # purpose -- the two halves are independently placeable, and in the container case they do
+        # not even run on the same system.
+        displaylink = { ... }: {
+          imports = [ ./modules/displaylink/options.nix ./modules/displaylink/nixos.nix ];
         };
 
         default = self.nixosModules.stableDevicePaths;
@@ -86,6 +119,24 @@
         # after it, which is exactly how this surfaced on a two-GPU host on 2026-07-29.
         stableDevicePaths = { ... }: {
           imports = [ ./modules/stable-device-paths/options.nix ./modules/stable-device-paths/system-manager.nix ];
+        };
+
+        # evdi on a foreign distribution: the module parameter and the load-at-boot instruction as
+        # ordinary /etc files, plus the pacman name of the DKMS package. Requires
+        # nixarch.systemManagerModules.packages -- see that plane's header for why that
+        # requirement cannot be made conditional.
+        evdi = { ... }: {
+          imports = [ ./modules/evdi/options.nix ./modules/evdi/system-manager.nix ];
+        };
+
+        # DisplayLinkManager on Arch, where pacman owns the binary and the unit. `probeFact` is
+        # closed over HERE, before the module system ever sees the result, so the exported value
+        # is a plain module function taking the usual `{ config, lib, ... }`.
+        displaylink = { ... }: {
+          imports = [
+            ./modules/displaylink/options.nix
+            (import ./modules/displaylink/system-manager.nix { inherit probeFact; })
+          ];
         };
 
         default = self.systemManagerModules.toolchain;
@@ -122,6 +173,19 @@
           # check` passing while covering none of it.
           stable-device-paths = import ./checks/stable-device-paths.nix {
             pkgs = nixpkgs.legacyPackages.${system};
+          };
+
+          # The DisplayLink pair, both planes each. Evaluated against stub host planes rather than
+          # a real NixOS/system-manager eval: what is worth pinning here is the exact TEXT these
+          # modules generate (a modprobe line whose absence is a silent no-op, an ExecStart), and
+          # a stub gets at those values without either backend's closure.
+          evdi = import ./checks/evdi.nix {
+            pkgs = nixpkgs.legacyPackages.${system};
+          };
+
+          displaylink = import ./checks/displaylink.nix {
+            pkgs = nixpkgs.legacyPackages.${system};
+            inherit probeFact;
           };
         });
 

@@ -18,7 +18,15 @@ repo README and CONTRACT.md):
 **Level 1** — the host itself, true whether or not anything ever contends
 for the card. `nixosModules` / `systemManagerModules`:
 
-- `stable-device-paths/` — vendor-keyed `/dev/dri/by-vendor` symlinks, so DRM
-  re-enumeration never moves a device path out from under a consumer
+- `stable-device-paths/` — the host's COMPLETE DRM device inventory (PCI *and*
+  platform devices), plus the `by-vendor`/`by-driver` symlinks generated from
+  it, so DRM re-enumeration never moves a device path out from under a consumer
+  and no device is missing from the table a consumer computes a complement
+  against
+- `evdi/` — the virtual DRM device a DisplayLink dock draws through; its module
+  parameter is not optional (upstream's default of 0 creates no device at all)
+- `displaylink/` — DisplayLinkManager, evdi's proprietary userland. Separate
+  from `evdi/` because the two halves are independently placeable — kernel on
+  the metal, userland wherever the desktop is
 - `toolchain/` — the vendor's compute runtime (CUDA/ROCm/oneAPI-class) plus
   its monitoring tool, resolved per host plane

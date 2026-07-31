@@ -120,8 +120,44 @@ These are about the machine underneath it — and they are offered on both the
 NixOS and the Arch/CachyOS plane, because a GPU host is not necessarily a
 NixOS host.
 
-- **`stableDevicePaths`** *(NixOS)* — vendor-keyed `/dev/dri/by-vendor` symlinks,
-  so `device-tokens`' paths resolve regardless of DRM enumeration order.
+- **`stableDevicePaths`** *(NixOS + system-manager)* — the host's **complete DRM
+  device inventory**, and stable `/dev/dri` symlinks generated from it, so
+  `device-tokens`' paths resolve regardless of DRM enumeration order.
+
+  ```nix
+  nixgpu.stableDevicePaths.devices = {
+    gpu0 = { vendor = "amd"; pciId = "0x1002"; vramMiB = 16384; };
+    bmc0 = { vendor = "aspeed"; pciId = "0x1a03"; vramMiB = 16; hasRenderNode = false; };
+    dock = { bus = "platform"; driver = "evdi"; };   # no PCI parent at all
+  };
+  ```
+
+  `bus` is a discriminator, not decoration: a PCI device is matched on
+  `ATTRS{vendor}` and a platform device on `DRIVERS`, and until that split
+  existed a virtual DRM device (`evdi`) was **undeclarable**. That was a
+  correctness hole rather than a cosmetic gap — the inventory is the only place
+  this family states which DRM devices a host has, and a consumer that can only
+  *exclude* devices has to compute the complement of the permitted set against
+  it. An undeclared device is not absent from the machine; it is absent from the
+  restriction. `hasRenderNode` is a fact about the driver (set at compile time
+  by `DRIVER_RENDER`), not a preference, and decides whether a `renderD*` rule
+  is worth emitting at all.
+- **`evdi`** *(NixOS + system-manager)* — the virtual DRM device a DisplayLink
+  dock draws through. ⚠ `initial_device_count` defaults to **0** upstream, so a
+  bare module load registers no device at all and every other signal says it
+  worked; this module always writes the parameter. The N devices are created at
+  `module_init()` with no parent and are never torn down, so plugging a dock is
+  a **connector** hotplug on a card that is already there — which is why both
+  wlroots and Smithay handle it with no DisplayLink-specific support. One evdi
+  device = one connector = one monitor.
+- **`displaylink`** *(NixOS + system-manager)* — DisplayLinkManager, evdi's
+  proprietary userland, modelled with its real dependency on the module being
+  loaded. Deliberately a separate module from `evdi`: the two halves are
+  independently placeable, and in the container case they do not even run on the
+  same system. The NixOS plane is Wayland-shaped and refuses to run beside
+  nixpkgs' own X11-keyed DisplayLink module; the Arch plane carries the
+  dependency override that stops one unsatisfiable `evdi` dependency from
+  aborting the AUR reconcile for every package on the box.
 - **`toolchain`** *(NixOS + system-manager)* — the vendor compute runtime:
   CUDA / ROCm / oneAPI-class, plus the vendor's own monitoring tool.
 

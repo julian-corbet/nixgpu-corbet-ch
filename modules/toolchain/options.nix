@@ -42,16 +42,25 @@ let
   # Read DEFENSIVELY: stableDevicePaths may not be imported at all, and this module must not
   # require it. An empty inventory means "no facts to check against", never a failure.
   inventory = config.nixgpu.stableDevicePaths.devices or { };
-  inventoryPciIds = lib.mapAttrsToList (_: d: d.pciId) inventory;
 
-  wantedPciId = if config.nixgpu.toolchain.vendor == null then null
-  else toolchainPciIds.${config.nixgpu.toolchain.vendor} or null;
+  # PCI entries only, nulls filtered out. Since the inventory gained a `bus` discriminator it also
+  # holds PLATFORM devices (`evdi`, the virtual card a DisplayLink dock drives), which have no PCI
+  # vendor ID at all and carry `pciId = null` by design. Two things break without this filter: the
+  # message below interpolates a null, and -- the real one -- a host whose inventory lists only
+  # platform devices would read as "an inventory that does not contain your card" when what it
+  # actually is is an inventory with nothing PCI in it to compare against.
+  pciInventory = lib.filterAttrs (_: d: (d.pciId or null) != null) inventory;
+  inventoryPciIds = lib.mapAttrsToList (_: d: d.pciId) pciInventory;
+
+  wantedPciId =
+    if config.nixgpu.toolchain.vendor == null then null
+    else toolchainPciIds.${config.nixgpu.toolchain.vendor} or null;
 
   # Only a real contradiction: both sides declared, and the vendor this host wants a runtime for
   # has no card in the host's own inventory.
   vendorContradiction =
     wantedPciId != null
-    && inventory != { }
+    && inventoryPciIds != [ ]
     && !(lib.elem wantedPciId inventoryPciIds);
 in
 {
@@ -125,9 +134,11 @@ in
   # mechanism switch is what left the same-vendor refusal and the `vendors` readOnly guard inert on
   # facts-only hosts.
   #
-  # Silent whenever either side is absent -- no inventory, or no vendor -- because then there is
-  # genuinely nothing to contradict. This is a coherence check, not a completeness requirement: a
-  # host may legitimately declare a compute vendor with no inventory at all.
+  # Silent whenever either side is absent -- no PCI inventory, or no vendor -- because then there
+  # is genuinely nothing to contradict. This is a coherence check, not a completeness requirement:
+  # a host may legitimately declare a compute vendor with no inventory at all, or an inventory
+  # made up entirely of platform devices (a laptop that has recorded its DisplayLink `evdi` card
+  # and not yet its iGPU).
   config.assertions = lib.optional vendorContradiction {
     assertion = false;
     message = ''
@@ -135,7 +146,7 @@ in
       ${config.nixgpu.toolchain.vendor} compute runtime (PCI vendor ${wantedPciId}), but
       nixgpu.stableDevicePaths.devices lists no device with that PCI vendor ID.
 
-      Declared inventory: ${lib.concatStringsSep ", " (lib.mapAttrsToList (n: d: "${n} = ${d.pciId}") inventory)}
+      Declared PCI inventory: ${lib.concatStringsSep ", " (lib.mapAttrsToList (n: d: "${n} = ${d.pciId}") pciInventory)}
 
       These are two statements about the same silicon and they disagree. One of them is a typo --
       most often a host declaration copy-pasted from a machine with a different card, where the
