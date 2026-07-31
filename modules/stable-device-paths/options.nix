@@ -15,69 +15,29 @@
 #
 # THE FIX: a udev rule keyed on PCI vendor ID instead of enumeration index.
 # `/dev/dri/by-vendor/<name>-card` / `-render` always resolve to whichever node is actually backed
-# by that vendor's silicon. A `mount --bind` / `stat()` on a symlink resolves to the real device, so
-# both a device-plugin's cgroup rule and its bind-mount end up correct with nothing else changed.
-#
-# It also excludes virtual display devices for free: `evdi` is a PLATFORM device with no `vendor`
-# attribute at all, so a vendor-keyed rule can never match it. Verified on real hardware.
+# by that vendor's silicon. It also excludes virtual display devices for free: `evdi` is a PLATFORM
+# device with no `vendor` attribute at all, so a vendor-keyed rule can never match it. Verified on
+# real hardware.
 #
 # Options only -- the NixOS and system-manager planes each consume `rules` in their own way. Both
 # planes exist because a GPU host is not necessarily a NixOS host: an Arch/CachyOS laptop with one
 # real card hits the identical renumbering hazard the moment a dock is plugged in.
 #
-# ── `devices`: the per-device inventory, and why it lives here now ──────────────────────────────
-#
-# Until now this module's only state was `vendors`, a hand-typed vendor-name -> PCI-ID map. That
-# was a second, independently-maintained copy of a fact nixhost ALSO hand-declares as
-# `resources.gpu.<name> = { vendor; pciId; vramMiB; }` -- the same silicon, typed twice, in two
-# repos that can drift apart. This is the real-consequence half of that duplication: a production
-# GPU-pod misrouting this week traced back to exactly this kind of device identity being
-# addressed inconsistently.
-#
-# `devices` is now the one place that fact is typed: a per-device inventory (vendor, PCI ID,
-# VRAM), keyed by a stable name -- the same shape and the same field names as nixhost's
-# `resources.gpu.<name>`, on purpose, so a future `resources.gpu = config.nixgpu.stableDevicePaths.
-# devices or { }` mirror in nixhost (nixhost's own repo, not touched here) is a straight read, not
-# a reshaping exercise. `vendors` is then DERIVED from `devices` below rather than hand-settable --
-# see its own description for why that is a breaking change this repo accepts on purpose.
-#
-# WHY THE INVENTORY LIVES INSIDE stableDevicePaths RATHER THAN AS ITS OWN nixosModule: this is the
-# one place in nixgpu that already needs a vendor -> PCI-ID fact to generate udev rules from.
-# Splitting "what GPUs exist" into a separate always-imported module would mean a host has to
-# import two nixosModules in lockstep to get one coherent feature, for no consumer that exists
-# yet -- YAGNI cuts the other way once there is a second real consumer (nixhost's mirror will read
-# `config.nixgpu.stableDevicePaths.devices or { }` regardless of nesting depth; the defensive-read
-# idiom does not care how deep the path is).
-#
-# WHY NO DEFAULT DEVICE: the old `vendors` default (`{ amd = "0x1002"; }`) baked one operator's
-# hardware assumption into a public repo's default, which is exactly what this family's own rules
-# say not to do (see nixhost's ASSERT-RESOLVED discussion and this project's "no fake data"
-# convention). `devices` therefore defaults to `{ }` -- an empty inventory is a legitimate state
-# (no GPU, or a GPU this repo hasn't been told about yet), unlike an empty `resources.cpu.cores`.
-# A host that wants the AMD default back states it once: `nixgpu.stableDevicePaths.devices.gpu0 =
-# { vendor = "amd"; pciId = "0x1002"; vramMiB = 16384; };`.
+# `devices` is the single per-device inventory (vendor, PCI ID, VRAM) the udev rules are generated
+# from; `vendors` below is DERIVED from it, not hand-settable -- see that option's own description
+# for the cross-repo duplication this closes.
 #
 # THE ONE THING THIS DOES NOT SOLVE: two devices sharing a vendor. A udev rule can only match
 # `ATTRS{vendor}=="0x1002"` -- it has no way to further ask "which of the two 0x1002 cards is
-# this", because PCI vendor ID is a property of the SILICON MAKER, not of the individual card.
-# Keying the derived map by device NAME instead of vendor name would not fix this either: the
-# match condition is still vendor-ID-only, so two rules for two devices that share a vendor would
-# both match BOTH physical cards, and each card would end up wearing both symlinks -- silently
-# wrong in a new way, not an improvement on today's silently-wrong-for-a-different-reason bug.
-# A real fix needs a second, per-device match condition udev actually has (`KERNELS` on the PCI
-# bus address / `ID_PATH`, not just `ATTRS{vendor}`), which is a real udev-rule change this task
-# did not ask for and is left as follow-up work. What IS done here: `devices` can already express
-# two same-vendor cards (they are just two entries with the same `vendor`/`pciId` and different
-# names), and the assertion below REFUSES to generate rules for that case instead of silently
-# emitting a rule pair that resolves to whichever card udev processed last. Loud beats quiet --
-# see nixhost's own MIRROR + ASSERT-RESOLVED discussion for why a disappearing guard is worse than
-# a blocked build.
+# this", because PCI vendor ID is a property of the SILICON MAKER, not of the individual card. A
+# real fix needs a second, per-device match condition udev actually has (`KERNELS` on the PCI bus
+# address / `ID_PATH`), which is left as follow-up work; until then the assertion below REFUSES to
+# generate rules for a same-vendor collision rather than silently letting both cards wear both
+# symlinks.
 #
-# A concrete near-term case this shape has to cover, not just a hypothetical: a devhome-class host
-# has an ASPEED/AST BMC framebuffer (PCI vendor `0x1a03`) alongside a real AMD card. Two DIFFERENT
-# vendors on one host is the easy case (the assertion below is silent for it, and each gets its own
-# unambiguous symlink pair) -- it is included in this file's `example` as data, not wired in as a
-# default, because a public repo's default must not assume any operator's specific hardware.
+# A concrete case this shape has to cover: a host with an ASPEED/AST BMC framebuffer (PCI vendor
+# `0x1a03`) alongside a real AMD card -- two DIFFERENT vendors, the easy case, each getting its own
+# unambiguous symlink pair (see this file's `example`).
 { lib, config, options, ... }:
 let
   cfg = config.nixgpu.stableDevicePaths;
@@ -157,9 +117,8 @@ in
             # (`ATTRS{vendor}=="${pciId}"`). Every wrong shape fails the same silent way: the rule
             # parses, matches no device, and the symlink simply never appears, which surfaces later
             # as "the card moved" rather than as a config error. `""` is the worst case
-            # (`ATTRS{vendor}==""`) and was previously guarded by an assertion in nixhost that this
-            # wave deleted on the grounds that the owner enforces it; this is that enforcement,
-            # made stricter than the assertion was and active regardless of `enable`.
+            # (`ATTRS{vendor}==""`); nixhost relies on this type to reject it instead of an
+            # assertion of its own, active here regardless of `enable`.
             type = lib.types.strMatching "0x[0-9a-fA-F]{4}";
             example = "0x1002";
             description = ''

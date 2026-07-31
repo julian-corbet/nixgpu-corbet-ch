@@ -7,10 +7,10 @@
 # /var/lib/example, and no credential appears in any form. Enabling all four at
 # once is not a deployment anyone would want; it is a proof that each renders.
 #
-# Note how little this file contains. These modules are almost entirely
-# knowledge — of the four, exactly one option in the whole repository has no
-# default. That is the arbiter being genuinely self-contained: it describes how a
-# card is shared, and that does not vary by site.
+# These modules are almost entirely knowledge — of the four, exactly one option
+# in the whole repository has no default. That is the arbiter being genuinely
+# self-contained: it describes how a card is shared, and that does not vary by
+# site.
 {
   # Required by the nixidy environment itself, not by any module here.
   nixidy.target.repository = "https://example.com/example-org/example-gitops.git";

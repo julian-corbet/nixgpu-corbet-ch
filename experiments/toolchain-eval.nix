@@ -37,8 +37,7 @@ rec {
   disabled = arch { enable = false; vendor = "amd"; };
   noVendor = arch { enable = true; };
 
-  # The names carried over from the profile this replaced, unchanged. If these drift, a real
-  # machine gets the wrong multi-gigabyte install.
+  # Real vendor package names. If these drift, a real machine gets the wrong multi-gigabyte install.
   amdNamesIntact =
     lib.elem "rocm-hip-sdk" amdFull
     && lib.elem "rocm-opencl-sdk" amdFull

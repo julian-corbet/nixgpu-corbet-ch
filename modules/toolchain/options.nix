@@ -22,11 +22,6 @@
 # system-manager.nix to pacman names. Package names are not portable across platforms and this is
 # the one place in nixgpu where that bites, so each plane carries its own real implementation
 # rather than a shim over a shared list. Same shape nixram and nixdev already use.
-#
-# HISTORY: the pacman half of this started life as nixarch's `ai-workstation` profile, whose own
-# header called the GPU package names "the one genuinely hard-to-get-right bit and the main reason
-# this profile exists". That was true, and it was the only part worth keeping -- but a GPU runtime
-# is a GPU concern, not an Arch-packaging concern, so it moved here and the profile dissolved.
 { lib, config, ... }:
 let
   # Canonical PCI vendor IDs for the vendors this module's enum dispatches on. Catalogue facts

@@ -17,16 +17,8 @@
 let
   cfg = config.nixgpu.pressureWatcher;
 
-  # THE ONE OWNER of the amdgpu sysfs attribute names (top-level `nixgpu.sysfs`, not nested under
-  # this app's own `nixgpu.pressureWatcher`): a kernel-interface fact about the discrete GPU itself,
-  # not an opinion of the pressure watcher. Declared here because this is nixgpu's only module that
-  # reads it today, but namespaced at `nixgpu.sysfs.*` on purpose, so ANY other consumer -- another
-  # nixgpu module tomorrow, or a sibling repo like nixllm mirroring it via `config.nixgpu.sysfs.* or
-  # <its own fallback>` (the family's `mirrorOf` idiom, see nixhost's modules/nixhost.nix) -- reads
-  # the SAME option instead of restating the string. Before this existed, the fact lived twice: once
-  # here as an option, once in nixllm as a bare literal in a shell script with no option at all -- and
-  # nothing checked whether the two agreed. Below, `sysfsCfg` is just this module's OWN read of that
-  # one owner, proving the pressure watcher is a consumer like any other, not a second source of truth.
+  # `nixgpu.sysfs` (declared below) is the one owner of the amdgpu sysfs attribute names; this is
+  # just this module's own read of it, not a second source of truth.
   sysfsCfg = config.nixgpu.sysfs;
 
   # The engine label key is embedded in a kubectl jsonpath expression, where every dot inside a
@@ -230,14 +222,12 @@ let
 in
 {
   # THE ONE OWNER of the amdgpu sysfs attribute names: a fact about the discrete GPU's kernel
-  # interface, not about this (or any) particular app. Top-level `nixgpu.sysfs`, deliberately NOT
-  # nested under `nixgpu.pressureWatcher` below, even though this module is nixgpu's only consumer
-  # of it today — nesting it under one app's namespace would make every OTHER consumer (another
-  # nixgpu module tomorrow; a sibling repo like nixllm's serving lane, which needs the same
-  # `vramTotalAttr` to find live VRAM size for its own fit-skip gate) either import an unrelated
-  # app's options just to read three strings, or fork its own copy — which is exactly the defect
-  # this option exists to close (the copy in nixllm was a bare literal with no option at all, and
-  # nothing checked whether it agreed with this one). A sibling repo mirrors this defensively —
+  # interface, not about this (or any) particular app. Kept top-level, not nested under
+  # `nixgpu.pressureWatcher` below, even though this module is nixgpu's only consumer of it today —
+  # nesting it under one app's namespace would force every OTHER consumer (another nixgpu module; a
+  # sibling repo like nixllm's serving lane, which needs the same `vramTotalAttr` for its own
+  # fit-skip gate) to either import an unrelated app's options just to read three strings, or fork
+  # its own copy that nothing checks agrees with this one. A sibling repo mirrors this defensively —
   # `config.nixgpu.sysfs.vramTotalAttr or <its own fallback>` (the family's `mirrorOf` idiom, see
   # nixhost's modules/nixhost.nix) — so it keeps working with zero nixgpu dependency when this
   # module, or nixgpu entirely, is absent from its environment.
@@ -321,14 +311,12 @@ in
 
     nodeSelector = lib.mkOption {
       type = lib.types.attrsOf lib.types.str;
-      # NO DEFAULT. The old default was `{ gpu = "amd"; }`, which is not a fact about
-      # GPUs -- it is a fact about ONE operator's node labels, and it appeared as a default
-      # in five places across three repos, so "this deployment is AMD/RDNA2" was being
-      # asserted by modules with no way to know it. A wrong node selector does not fail
-      # loudly: it silently schedules nothing, or schedules onto a node with no card.
-      # Requiring it makes the caller state what their labels actually are.
+      # NO DEFAULT: `{ gpu = "amd"; }` is a fact about one operator's node labels, not about
+      # GPUs in general. A wrong node selector does not fail loudly -- it silently schedules
+      # nothing, or schedules onto a node with no card -- so the caller must state what their
+      # labels actually are.
       #
-      # Contrast the vendor-ID catalogue in stable-device-paths, which is KEPT: that
+      # Contrast the vendor-ID catalogue in stable-device-paths, which IS a default: that
       # `amd = "0x1002"` is a true fact about AMD, not a choice about this deployment. A
       # catalogue may ship facts; a default must not ship someone else's values.
       example = { gpu = "amd"; };
@@ -362,10 +350,6 @@ in
         triggers.
       '';
     };
-
-    # sysfs.* moved 2026-07-30 -- see the top-level `options.nixgpu.sysfs` above, which is now the
-    # sole owner of these three attribute names. This module reads them via `sysfsCfg` (the `let`
-    # binding above), same as any other consumer would.
 
     hiWater = lib.mkOption {
       # strMatching so a non-numeric value fails at eval time instead of inside awk at runtime.
