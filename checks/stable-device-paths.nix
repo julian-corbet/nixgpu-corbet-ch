@@ -42,16 +42,17 @@ let
     in
     !r.success || r.value != [ ];
 
-  # Forces the inventory deeply, MINUS `cardPath`/`renderPath` -- so a device's this-devices'-shape
-  # correctness ("is `vendor`/`pciId`/`vramMiB`/... well-formed") stays a separate question from
-  # "does a *derived path* resolve", which is the whole point of `cardPath` throwing lazily when
-  # `address` is unset (see options.nix's own comment on that default). Every existing case below
-  # declares no `address`, so a naive `deepSeq` over the untouched submodule would force that throw
-  # on every one of them and report a well-formed device as REJECTED -- discovered by exactly that
+  # Forces the inventory deeply, MINUS `cardPath`/`renderPath`/`cardNamePath`/`renderNamePath` --
+  # so a device's this-devices'-shape correctness ("is `vendor`/`pciId`/`vramMiB`/... well-formed")
+  # stays a separate question from "does a *derived path* resolve", which is the whole point of
+  # `cardPath` (and its `by-name` counterpart `cardNamePath`) throwing lazily when `address` is
+  # unset (see options.nix's own comment on that default). Every existing case below declares no
+  # `address`, so a naive `deepSeq` over the untouched submodule would force that throw on every
+  # one of them and report a well-formed device as REJECTED -- discovered by exactly that
   # regression the first time `accepts` was pointed at a device with `cardPath` added and no
   # `address` set.
   devicesSansPaths = settings:
-    lib.mapAttrs (_name: d: builtins.removeAttrs d [ "cardPath" "renderPath" ])
+    lib.mapAttrs (_name: d: builtins.removeAttrs d [ "cardPath" "renderPath" "cardNamePath" "renderNamePath" ])
       (eval settings).config.nixgpu.stableDevicePaths.devices;
 
   accepts = settings:
@@ -402,6 +403,96 @@ let
           evdi = evdi // { address = "evdi.0"; };
         };
       });
+
+    # ── THE `by-name` FAMILY: colon-free, unambiguous, keyed on the device's own name ────────
+    #
+    # This is the family that actually goes in `WLR_DRM_DEVICES` -- see options.nix's header,
+    # "A FOURTH SYMLINK FAMILY", for why `cardPath` (contains colons) and `by-vendor` (ambiguous
+    # under a same-vendor collision) both fail that specific job.
+    "a PCI device's cardNamePath is by-name, keyed on its own attrset key" =
+      (deviceOf { devices.gpu0 = amd // { address = "0000:0a:00.0"; }; } "gpu0").cardNamePath
+        == "/dev/dri/by-name/gpu0-card";
+    "a PCI device's renderNamePath is the by-name render counterpart" =
+      (deviceOf { devices.gpu0 = amd // { address = "0000:0a:00.0"; }; } "gpu0").renderNamePath
+        == "/dev/dri/by-name/gpu0-render";
+    "a platform device's cardNamePath uses its own key too, not the driver name" =
+      (deviceOf { devices.dock = evdi // { address = "evdi.0"; }; } "dock").cardNamePath
+        == "/dev/dri/by-name/dock-card";
+
+    # renderNamePath is null exactly when hasRenderNode is false, same reasoning as renderPath.
+    "renderNamePath is null when hasRenderNode is false, even with address set" =
+      (deviceOf { devices.evdi = evdi // { address = "evdi.0"; }; } "evdi").renderNamePath == null;
+
+    # Same read-time enforcement as cardPath/renderPath, for the same reason: a `by-name` symlink
+    # this module did not generate a rule for (no `address`) must not be handed out as a live path.
+    "cardNamePath throws when address is unset" =
+      throwsOn { devices.gpu0 = amd; } "gpu0" "cardNamePath";
+    "renderNamePath throws when address is unset and hasRenderNode is true" =
+      throwsOn { devices.gpu0 = amd; } "gpu0" "renderNamePath";
+    "renderNamePath does NOT throw when hasRenderNode is false, address or not" =
+      !(throwsOn { devices.evdi = evdi; } "evdi" "renderNamePath");
+
+    # The generated rule: bus-agnostic KERNELS match, no ATTRS/DRIVERS involved at all.
+    "a PCI device with address generates a by-name card+render rule pair via KERNELS" =
+      rulesOf { devices.gpu0 = amd // { address = "0000:0a:00.0"; }; } == ''
+        SUBSYSTEM=="drm", KERNEL=="card[0-9]*", ATTRS{vendor}=="0x1002", SYMLINK+="dri/by-vendor/amd-card"
+        SUBSYSTEM=="drm", KERNEL=="renderD[0-9]*", ATTRS{vendor}=="0x1002", SYMLINK+="dri/by-vendor/amd-render"
+        SUBSYSTEM=="drm", KERNEL=="card[0-9]*", KERNELS=="0000:0a:00.0", SYMLINK+="dri/by-name/gpu0-card"
+        SUBSYSTEM=="drm", KERNEL=="renderD[0-9]*", KERNELS=="0000:0a:00.0", SYMLINK+="dri/by-name/gpu0-render"
+      '';
+    # No render rule when hasRenderNode is false -- same "don't emit a rule that can never match"
+    # discipline as by-vendor/by-driver.
+    "a by-name device with no render node generates only its card rule" =
+      rulesOf { devices.ast = ast // { address = "0000:05:00.0"; hasRenderNode = false; }; } == ''
+        SUBSYSTEM=="drm", KERNEL=="card[0-9]*", ATTRS{vendor}=="0x1a03", SYMLINK+="dri/by-vendor/aspeed-card"
+        SUBSYSTEM=="drm", KERNEL=="card[0-9]*", KERNELS=="0000:05:00.0", SYMLINK+="dri/by-name/ast-card"
+      '';
+    # A device with no `address` gets no by-name rule at all -- but keeps its by-vendor rule,
+    # exactly like it keeps no cardPath (see that option's own default).
+    "a device with no address generates by-vendor but no by-name rule" =
+      rulesOf { devices.gpu0 = amd; } == ''
+        SUBSYSTEM=="drm", KERNEL=="card[0-9]*", ATTRS{vendor}=="0x1002", SYMLINK+="dri/by-vendor/amd-card"
+        SUBSYSTEM=="drm", KERNEL=="renderD[0-9]*", ATTRS{vendor}=="0x1002", SYMLINK+="dri/by-vendor/amd-render"
+      '';
+    "a platform device's by-name rule matches KERNELS on the instance name, not DRIVERS" =
+      rulesOf { devices.dock = evdi // { address = "evdi.0"; }; } == ''
+        SUBSYSTEM=="drm", KERNEL=="card[0-9]*", DRIVERS=="evdi", SYMLINK+="dri/by-driver/evdi-card"
+        SUBSYSTEM=="drm", KERNEL=="card[0-9]*", KERNELS=="evdi.0", SYMLINK+="dri/by-name/dock-card"
+      '';
+
+    # THE POINT OF THE FAMILY: two devices sharing a vendor are refused a distinct `by-vendor`
+    # symlink (see the ambiguity case below), but each still gets its OWN, unambiguous `by-name`
+    # rule the moment each carries its own `address` -- because `KERNELS==` matches the SLOT, and
+    # two cards never share a slot even when they are identical silicon.
+    "two same-vendor devices each get a distinct by-name rule when both declare an address" =
+      let
+        r = rulesOf {
+          devices = {
+            gpu0 = amd // { address = "0000:0a:00.0"; };
+            gpu1 = amd // { vramMiB = 8192; address = "0000:0b:00.0"; };
+          };
+        };
+      in
+      lib.hasInfix ''KERNELS=="0000:0a:00.0", SYMLINK+="dri/by-name/gpu0-card"'' r
+      && lib.hasInfix ''KERNELS=="0000:0b:00.0", SYMLINK+="dri/by-name/gpu1-card"'' r;
+
+    # ── THE DEVICE-NAME GUARD: a colon in the name must be refused, not silently reproduced ──
+    #
+    # This is the whole reason `by-name` is safe to put in `WLR_DRM_DEVICES` in the first place --
+    # see options.nix's `unsafeDeviceNames` and its assertion for why this has to be an assertion
+    # (an attrset KEY, unlike `vendor`, is not a `mkOption`-typed field a type can constrain).
+    "a device name containing a colon is refused" =
+      refused { devices."gp:u0" = amd // { address = "0000:0a:00.0"; }; };
+    # Refused even with no `address` at all and no host plane enabled -- ungated, like the
+    # required-field checks: wrong the moment it is written, not only once a rule is generated.
+    "a device name containing a colon is refused even on a facts-only host" =
+      refused { devices."gp:u0" = amd; };
+    "a device name containing a slash is refused" =
+      refused { devices."gp/u0" = amd; };
+    # Letters, digits, underscore and hyphen are all the existing `vendor`/`driver` fields already
+    # allow -- a device name is held to the identical bar, not a stricter one.
+    "a device name using digits, underscore and hyphen is accepted" =
+      !(refused { devices."gpu-0_1" = amd; });
 
     # ── toolchain.vendor vs the inventory, compared by PCI ID ───────────────────────────────
     # The two fields use different vocabularies on purpose, so they reconcile through pciId.

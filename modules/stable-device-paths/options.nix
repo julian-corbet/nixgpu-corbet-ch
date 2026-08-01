@@ -36,21 +36,29 @@
 # device class that appears and renumbers everything after it was the one class the inventory could
 # not name.
 #
-# ── THE ONE THING THIS DOES NOT SOLVE: two devices that match identically ────────────────────
+# ── THE ONE THING `by-vendor`/`by-driver` DO NOT SOLVE: two devices that match identically ─────
 #
 # A PCI rule can only match `ATTRS{vendor}=="0x1002"` -- it has no way to further ask "which of the
 # two 0x1002 cards is this", because PCI vendor ID is a property of the SILICON MAKER, not of the
 # individual card. A platform rule has the same shape one level over: `DRIVERS=="evdi"` matches
-# every device that driver owns. A real fix needs a second, per-device match condition udev
-# actually has (`KERNELS` on the PCI bus address / `ID_PATH`), which is left as follow-up work;
-# until then the assertions below REFUSE to generate rules for such a collision rather than
-# silently letting both nodes wear both symlinks.
+# every device that driver owns. The assertions below REFUSE to generate a `by-vendor`/`by-driver`
+# rule for such a collision rather than silently letting both nodes wear both symlinks.
 #
-# ⚠ evdi is the case where that limitation is NOT a defect to work around, and consumers must not
+# The real fix -- a second, per-device match condition udev actually has (`KERNELS` on the PCI bus
+# address / platform instance name, not just the vendor ID or driver name) -- is the `by-name`
+# family below (`cardNamePath`/`renderNamePath`, see "A FOURTH SYMLINK FAMILY" further down): it
+# never reads `vendor`/`driver` at all, so two same-vendor or same-driver devices are simply not a
+# case it can collide on. It is a narrower fix than it sounds, not a replacement for the refusal
+# above -- it needs `address` set, which `by-vendor`/`by-driver` do not, so an inventory with two
+# same-vendor cards and no `address` on either still hits the refusal below the moment `by-vendor`
+# rules are asked for.
+#
+# ⚠ evdi is the case where NEITHER limitation is a defect to work around, and consumers must not
 # try: `initial_device_count=N` creates N evdi devices, one connector each, all owned by the one
-# driver, and there is no stable per-device identity to key a symlink on anyway. An evdi output is
-# addressed by CONNECTOR NAME, never by node path -- evdi exposes a zero-byte EDID, so it cannot
-# even be matched by the `"<make> <model> <serial>"` triple both compositors otherwise accept. One
+# driver, and there is no stable per-device identity to key ANY symlink family on -- `address`
+# included, since all N devices share the one platform instance name. An evdi output is addressed
+# by CONNECTOR NAME, never by node path -- evdi exposes a zero-byte EDID, so it cannot even be
+# matched by the `"<make> <model> <serial>"` triple both compositors otherwise accept. One
 # inventory entry describes the driver's devices as a class; that is the honest shape, and the
 # `by-driver` symlink is a convenience for the single-device case, never an identity for N.
 #
@@ -72,6 +80,48 @@
 # `renderPath` below only have to REPRODUCE that spelling as a Nix string, not generate a rule for
 # it. Verified live: `ls -l /dev/dri/by-path/` shows `pci-0000:0a:00.0-card` and
 # `platform-evdi.0-card` with zero rules of this repo's own involved.
+#
+# ── A FOURTH SYMLINK FAMILY: `by-name`, because `by-path` is UNUSABLE in `WLR_DRM_DEVICES` ──────
+#
+# wlroots' compositor-side device allowlist, `WLR_DRM_DEVICES`, is COLON-SEPARATED and parsed by
+# `explicit_find_gpus()` (backend/session/session.c, wlroots upstream) with a bare
+# `strtok_r(gpus, ":", &save)` -- no escaping, no quoting, verified live against wlroots `master`.
+# `cardPath` above is exactly the shape that breaks it: `/dev/dri/by-path/pci-0000:0a:00.0-card`
+# splits on ITS OWN colons into "/dev/dri/by-path/pci-0000", "0a", "00.0-card" -- three paths that
+# do not exist -- and `wlr_session_find_gpus()` opens none of them, logs
+# "Found 0 GPUs, cannot create backend", and refuses to start. A consumer that asks this module for
+# "the stable path of THIS device" must not be handed a string that is unusable in the single most
+# common place a stable device path is needed.
+#
+# `/dev/dri/by-vendor/<vendor>-card`, generated above, has no colon and would survive that parser
+# -- but it is the wrong fix for a different reason: it is AMBIGUOUS the instant two devices share
+# a vendor (see "THE ONE THING `by-vendor`/`by-driver` DO NOT SOLVE" above), and this module already
+# REFUSES to generate it in that case rather than let it silently resolve to whichever card udev
+# processed last. Trading wlroots' parser bug for a symlink that is not even guaranteed to name the
+# device that was asked for would be a worse fix than the bug it replaces.
+#
+# KWin's equivalent variable is NOT the same bug, which is worth being precise about:
+# `KWIN_DRM_DEVICES` is parsed by `GpuManager::splitPathList()` (src/core/gpumanager.cpp, KWin
+# upstream), which walks the string by hand and treats a BACKSLASH-ESCAPED colon (`\:`) as a
+# literal character rather than a separator. That does not make `cardPath` safe to hand to EITHER
+# compositor as-is: escaping the colon fixes KWin's parser and does nothing for wlroots', which has
+# no escape mechanism at all. There is no single spelling of a PCI `by-path` symlink that satisfies
+# both, so the fix cannot be "teach every consumer to escape `cardPath`" -- it has to be a symlink
+# that never contains the character either parser treats specially.
+#
+# `cardNamePath`/`renderNamePath` below are that symlink: `/dev/dri/by-name/<name>-card`/`-render`,
+# keyed on the device's own attrset key. `name` is unique BY CONSTRUCTION -- an attrset cannot
+# declare the same key twice -- so, unlike `vendors`/`derivedDrivers` above, nothing is ever
+# collapsed to build this family, and the same-vendor/same-driver ambiguity simply does not apply
+# to it (see "THE ONE THING..." above for the boundary of that claim: it still needs `address` set,
+# same as `cardPath`). The generated rule matches on `address` via `KERNELS==` -- the physical SLOT,
+# not the silicon, so it does not care how many other devices share a vendor or driver -- but the
+# SYMLINK NAME itself is built only from the attrset key, never from `address`'s own spelling (which
+# for a PCI device legitimately contains colons of its own, e.g. "0000:0a:00.0"). That is exactly
+# why the key is constrained to `[a-zA-Z0-9_-]+` by the assertion below: unlike `vendor`/`pciId`/
+# `driver` above, a device NAME is not a `mkOption`-typed field a `strMatching` type could reach --
+# it is the attrset key itself -- so an unsafe name would silently reproduce the very colon defect
+# this family exists to fix, just moved one layer up, from the by-path spelling into this one.
 #
 # Options only -- the NixOS and system-manager planes each consume `rules` in their own way. Both
 # planes exist because a GPU host is not necessarily a NixOS host: an Arch/CachyOS laptop with one
@@ -110,6 +160,32 @@ let
   # fold two functions away.
   identifiedPciDevices = lib.filterAttrs (_name: d: d.vendor != null && d.pciId != null) pciDevices;
   identifiedPlatformDevices = lib.filterAttrs (_name: d: d.driver != null) platformDevices;
+
+  # ── The `by-name` family: keyed on the attrset key alone, bus-agnostic ──────────────────────
+  #
+  # Unlike `by-vendor`/`by-driver`, this needs neither `pciDevices`/`platformDevices` split nor a
+  # `vendor`/`driver` identity check -- `KERNELS=="${address}"` matches a PCI bus address or a
+  # platform instance name identically (both are just the KERNEL NAME of some device up the parent
+  # chain), so `address` is the only thing a device needs to carry to get a rule here. A device
+  # without one gets no `by-name` rule, same as it gets no `cardPath` -- see that option's own
+  # `default` for why this is a graceful "never read" rather than a build-time failure.
+  devicesByName = lib.filterAttrs (_name: d: d.address != null) cfg.devices;
+
+  # Device NAMES become a symlink path component in the `by-name` rules below
+  # (`SYMLINK+="dri/by-name/${name}-card"`) -- and unlike `vendor`/`pciId`/`driver` above, which are
+  # `mkOption`-typed fields already constrained by `strMatching`, a device's NAME is the attrset KEY
+  # itself (the `name` argument the submodule below receives). The module system has no `attrsOf`
+  # variant that also validates its own keys, so this cannot be a type the way `vendor` is -- it has
+  # to be an assertion, the same tool `addressBusMismatch` below already reaches for when a type
+  # cannot see what it needs to see.
+  #
+  # Ungated on `enable`, same reasoning as the required-field lists below: an unsafe name is wrong
+  # data the moment it is declared, not only once a host plane turns it into a rule -- and the whole
+  # reason this needs enforcing at all is that a colon here would silently reproduce the exact
+  # `WLR_DRM_DEVICES` defect the `by-name` family exists to fix, just moved from the by-path spelling
+  # into this one (see "A FOURTH SYMLINK FAMILY" above).
+  unsafeDeviceNames = lib.attrNames
+    (lib.filterAttrs (deviceName: _d: builtins.match "[a-zA-Z0-9_-]+" deviceName == null) cfg.devices);
 
   # Collapse the per-device inventory onto a vendor-name -> PCI-ID map -- the shape `rules` below
   # has always consumed. A `foldlAttrs`, not a plain `mapAttrs`, because collapsing loses
@@ -492,6 +568,92 @@ in
               this option simply was not given enough to spell it.
             '';
           };
+
+          cardNamePath = lib.mkOption {
+            # Same shape as `cardPath`: every DRM device has a `card*` node, so the only reason
+            # this could fail to resolve is a missing `address` -- an input error, not a hardware
+            # fact -- and the throw is deferred to READ time for the same reason (see `cardPath`'s
+            # own comment on its `default`).
+            type = lib.types.str;
+            readOnly = true;
+            default =
+              if config.address == null then
+                throw ''
+                  nixgpu.stableDevicePaths.devices.${name}.cardNamePath was read, but this device
+                  declares no `address`. cardNamePath's SYMLINK NAME comes from this device's own
+                  attrset key (already unique -- see this option's description), but the udev rule
+                  that creates it matches on `address` (`KERNELS=="<address>"`) -- without one
+                  there is nothing for that rule to key on, so this string would name a symlink
+                  nothing creates. Set nixgpu.stableDevicePaths.devices.${name}.address; see
+                  `cardPath`'s description for the expected shape.
+                ''
+              else
+                "/dev/dri/by-name/${name}-card";
+            description = ''
+              THE FIX for `WLR_DRM_DEVICES`: see "A FOURTH SYMLINK FAMILY" in this file's header
+              for the full argument. Short version -- wlroots reads that colon-separated variable
+              with a bare `strtok_r(gpus, ":", &save)` (`backend/session/session.c`,
+              `explicit_find_gpus()`, no escaping), so `cardPath` above
+              (`/dev/dri/by-path/pci-0000:0a:00.0-card`) splits on its OWN colons into three
+              nonexistent paths and wlroots logs "Found 0 GPUs, cannot create backend" instead of
+              starting. `/dev/dri/by-vendor/<vendor>-card` has no colon and would parse fine, but
+              is AMBIGUOUS the moment two devices share a vendor -- and this module already
+              refuses to generate it in that case (see the ambiguity assertions below) rather than
+              hand out a path that might not name the device that was asked for.
+
+              `cardNamePath` is colon-free AND unambiguous: `${name}` is this device's own attrset
+              key, which cannot collide with any other device's key (attrsets do not allow
+              duplicate keys), so nothing is collapsed the way `vendors`/`derivedDrivers` collapse
+              the by-vendor/by-driver maps. Device names are constrained to `[a-zA-Z0-9_-]+` (an
+              assertion, not a type -- see that assertion's own comment for why a type cannot
+              reach an attrset KEY) for exactly this reason: a colon in the name would put the
+              same defect straight back into the one family built to be immune to it.
+
+              KWin's equivalent, `KWIN_DRM_DEVICES`, is parsed differently --
+              `GpuManager::splitPathList()` (`src/core/gpumanager.cpp`) DOES honor a backslash-
+              escaped colon (`\:`) as a literal character. That does not make `cardPath` safe to
+              hand to either compositor: escaping helps KWin's parser and does nothing for
+              wlroots', which has no escape mechanism at all. There is no single spelling of a
+              `by-path` symlink that satisfies both, which is why the fix is a colon-free symlink
+              rather than an escaping convention.
+
+              Unlike `cardPath` (reproduced by systemd-udev's OWN built-in rules, unconditionally,
+              whether or not this module is even imported), this symlink exists only on a host
+              where `nixgpu.stableDevicePaths.enable` is set -- it is generated BY this module's
+              own `rules`, the same as `by-vendor`/`by-driver`. readOnly, and throws when
+              `address` is unset for the same reason `cardPath` does; see that option's own
+              `default`.
+            '';
+          };
+
+          renderNamePath = lib.mkOption {
+            type = lib.types.nullOr lib.types.str;
+            readOnly = true;
+            default =
+              if !config.hasRenderNode then
+                null
+              else if config.address == null then
+                throw ''
+                  nixgpu.stableDevicePaths.devices.${name}.renderNamePath was read, but this
+                  device declares no `address` (and `hasRenderNode` is true, so a `by-name` render
+                  path DOES exist to name -- this is not the "no render node at all" case, see
+                  this option's `null` branch). Set
+                  nixgpu.stableDevicePaths.devices.${name}.address; see `cardPath`'s description
+                  for the expected shape.
+                ''
+              else
+                "/dev/dri/by-name/${name}-render";
+            description = ''
+              The `by-name` counterpart of `renderPath`, and the `render` twin of `cardNamePath`
+              above -- see that option's description for the full `WLR_DRM_DEVICES` argument.
+              `null`, not a throw, exactly when `hasRenderNode` is false, for the identical reason
+              `renderPath` is: there is no render node for any name to point at, on any host,
+              ever, and no rule is generated for it either (see `rules` below).
+
+              Throws exactly like `cardNamePath`, and for the same reason, when `hasRenderNode` is
+              true but `address` is unset.
+            '';
+          };
         };
       }));
       default = { };
@@ -560,14 +722,21 @@ in
     };
   };
 
-  # PCI first, then platform -- the order is cosmetic (udev applies every matching rule), but a
-  # stable order keeps a rendered rules file diffable across evaluations.
+  # by-vendor, then by-driver, then by-name -- the order is cosmetic (udev applies every matching
+  # rule), but a stable order keeps a rendered rules file diffable across evaluations.
   #
   # `DRIVERS==` and not `DRIVER==` on the platform half, and the difference is the whole rule:
   # `DRIVER` matches the driver of the device being processed, and a DRM node has none -- the
   # driver is bound to its PARENT (the platform device). `DRIVERS` walks the parent chain, which
   # is where the match actually lives. Exactly the same reason `ATTRS{vendor}` (parents) is used
   # on the PCI half rather than `ATTR{vendor}` (this device only).
+  #
+  # `by-name`, below, is one bus-agnostic block instead of a PCI/platform pair: `KERNELS==` (also
+  # plural, also parent-walking) matches a PCI bus address and a platform instance name the exact
+  # same way, because both are simply the KERNEL NAME of some device up the chain -- there is no
+  # `ATTRS`-vs-`DRIVERS` split to make here, which is the whole reason this family does not need
+  # `cfg.vendors`/`derivedDrivers` (or the vendor/driver identity checks behind them) at all. See
+  # "A FOURTH SYMLINK FAMILY" in this file's header for why this family exists.
   config.nixgpu.stableDevicePaths.rules =
     lib.concatStrings (
       (lib.mapAttrsToList
@@ -588,6 +757,15 @@ in
             SUBSYSTEM=="drm", KERNEL=="renderD[0-9]*", DRIVERS=="${driver}", SYMLINK+="dri/by-driver/${driver}-render"
           '')
         derivedDrivers)
+      ++ (lib.mapAttrsToList
+        (deviceName: device:
+          ''
+            SUBSYSTEM=="drm", KERNEL=="card[0-9]*", KERNELS=="${device.address}", SYMLINK+="dri/by-name/${deviceName}-card"
+          ''
+          + lib.optionalString device.hasRenderNode ''
+            SUBSYSTEM=="drm", KERNEL=="renderD[0-9]*", KERNELS=="${device.address}", SYMLINK+="dri/by-name/${deviceName}-render"
+          '')
+        devicesByName)
     );
 
   # Fires only when the ambiguity would actually reach a host: an inventory with two same-vendor
@@ -634,12 +812,14 @@ in
 
       A udev rule generated from this inventory matches on PCI vendor ID alone
       (ATTRS{vendor}=="0x...") -- it has no way to also ask "which card", so stableDevicePaths
-      cannot generate a distinct symlink pair per device when two devices share a vendor: both
-      cards would end up wearing both symlinks instead of one each. There is no per-device fix at
-      the `devices` level; the real fix is a second, per-device match condition the generated
-      rule does not carry yet (the PCI bus address / ID_PATH, not just the vendor ID). Until that
-      exists, either drop `stableDevicePaths.enable` for a host with two same-vendor cards, or
-      keep only one of the conflicting entries in `devices`.
+      cannot generate a distinct `by-vendor` symlink pair per device when two devices share a
+      vendor: both cards would end up wearing both symlinks instead of one each. This refusal is
+      about `by-vendor` specifically, not about naming the device at all: set `address` on each
+      device and read `cardNamePath`/`renderNamePath` (the `by-name` family, matched on the PCI
+      bus address instead of the vendor ID) if a consumer needs a distinct stable path per card --
+      that family does not collapse same-vendor devices and is not refused here. Otherwise, either
+      drop `stableDevicePaths.enable` for a host with two same-vendor cards, or keep only one of
+      the conflicting entries in `devices`.
     '';
   }
   ++ lib.optional (cfg.enable && ambiguousDrivers != { }) {
@@ -655,9 +835,11 @@ in
       If these entries are meant to be the N devices of ONE multi-device driver -- `evdi` with
       `initial_device_count = N` is the case this module was widened for -- then one entry is the
       correct declaration, not N. Those devices have no stable per-device identity to key a
-      symlink on in the first place, and a consumer addresses their outputs by CONNECTOR NAME
-      (evdi exposes a zero-byte EDID, so not even a make/model/serial match is available). Declare
-      the driver once and set `nixgpu.evdi.deviceCount` for how many there are.
+      symlink on in the first place -- not even `cardNamePath`/`renderNamePath` (the `by-name`
+      family), since all N devices of one driver share the one platform instance name -- and a
+      consumer addresses their outputs by CONNECTOR NAME instead (evdi exposes a zero-byte EDID,
+      so not even a make/model/serial match is available). Declare the driver once and set
+      `nixgpu.evdi.deviceCount` for how many there are.
     '';
   }
   ++ lib.optional (missingPciIdentity != [ ]) {
@@ -725,6 +907,27 @@ in
       prefix in `cardPath`/`renderPath` for the device it is actually meant to name.
 
       Fix the address to match this device's `bus`, or fix `bus` if that is the one that is wrong.
+    '';
+  }
+  ++ lib.optional (unsafeDeviceNames != [ ]) {
+    assertion = false;
+    message = ''
+      nixgpu.stableDevicePaths.devices entr(ies) ${lib.concatStringsSep ", " unsafeDeviceNames}
+      have a NAME (the attrset key itself) outside `[a-zA-Z0-9_-]+`.
+
+      A device's name becomes a symlink path component in the `by-name` family
+      (`SYMLINK+="dri/by-name/<name>-card"`, and `cardNamePath`/`renderNamePath`'s own value) --
+      the ONE symlink family this module builds specifically to be safe in `WLR_DRM_DEVICES`,
+      which wlroots splits on a bare colon with no escaping (see this file's header, "A FOURTH
+      SYMLINK FAMILY", for the full argument). A colon in the name would put that exact defect
+      back into the one spelling built to avoid it -- so this is refused outright rather than
+      trusted, the same way an empty `vendor` is refused above rather than silently producing
+      `/dev/dri/by-vendor/-card`.
+
+      Ungated on `enable`, unlike the ambiguity refusals above: an unsafe name is wrong the moment
+      it is written, whether or not any host plane ever turns it into a rule.
+
+      Rename the entry to use only letters, digits, `_`, and `-`.
     '';
   };
 }

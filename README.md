@@ -142,6 +142,15 @@ NixOS host.
   restriction. `hasRenderNode` is a fact about the driver (set at compile time
   by `DRIVER_RENDER`), not a preference, and decides whether a `renderD*` rule
   is worth emitting at all.
+
+  Set `address` (a device's PCI `domain:bus:device.function` or platform instance name) on an
+  entry and it also gets `cardNamePath`/`renderNamePath` — a fourth symlink family,
+  `/dev/dri/by-name/<key>-card`/`-render`, keyed on the device's own attrset key. This is the one
+  that is actually safe to put in `WLR_DRM_DEVICES`: wlroots splits that variable on a bare colon
+  with no escaping, so `cardPath`'s `pci-0000:0a:00.0-card` spelling silently breaks into three
+  nonexistent paths, and `by-vendor` (colon-free) is ambiguous the moment two devices share a
+  vendor. `by-name` is both colon-free and, because an attrset key can't collide, unambiguous even
+  between identical cards. See `modules/stable-device-paths/options.nix` for the full argument.
 - **`evdi`** *(NixOS + system-manager)* — the virtual DRM device a DisplayLink
   dock draws through. ⚠ `initial_device_count` defaults to **0** upstream, so a
   bare module load registers no device at all and every other signal says it

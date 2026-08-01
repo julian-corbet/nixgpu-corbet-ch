@@ -22,7 +22,9 @@ for the card. `nixosModules` / `systemManagerModules`:
   platform devices), plus the `by-vendor`/`by-driver` symlinks generated from
   it, so DRM re-enumeration never moves a device path out from under a consumer
   and no device is missing from the table a consumer computes a complement
-  against
+  against. Also `by-name` (`cardNamePath`/`renderNamePath`), the family that is
+  actually safe in `WLR_DRM_DEVICES` — colon-free unlike `by-path`, unambiguous
+  unlike `by-vendor`
 - `evdi/` — the virtual DRM device a DisplayLink dock draws through; its module
   parameter is not optional (upstream's default of 0 creates no device at all)
 - `displaylink/` — DisplayLinkManager, evdi's proprietary userland. Separate
