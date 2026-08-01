@@ -186,6 +186,31 @@ let
     "the same fieldless entry IS accepted on the platform bus" =
       !(refused { devices.evdi = { bus = "platform"; driver = "evdi"; }; });
 
+    # ── sharedSystemMemory: the OTHER honest way for `vramMiB` to be null on a PCI device ────
+    # An integrated GPU with no fixed VRAM (Intel Xe/Arc, AMD APUs) is still a real PCI device --
+    # it has a real vendor/pciId -- so it cannot reach the platform-bus escape hatch without a
+    # second, worse fabrication. This is the real, honest third state `missingPciVram` allows.
+    "a PCI device with no vramMiB is refused by default (no sharedSystemMemory)" =
+      refused { devices.gpu0 = { vendor = "intel"; pciId = "0x8086"; }; };
+    "sharedSystemMemory = true accepts a PCI device with null vramMiB" =
+      !(refused { devices.gpu0 = { vendor = "intel"; pciId = "0x8086"; sharedSystemMemory = true; }; });
+    # The escape hatch is per-device, not global: a SECOND PCI device in the same inventory, still
+    # without sharedSystemMemory, must still be refused -- proves the exemption did not leak.
+    "sharedSystemMemory on one device does not exempt a different one" =
+      refused {
+        devices = {
+          gpu0 = { vendor = "intel"; pciId = "0x8086"; sharedSystemMemory = true; };
+          gpu1 = { vendor = "amd"; pciId = "0x1002"; };
+        };
+      };
+    # sharedSystemMemory does not FORBID a real vramMiB -- an operator who sets both is stating an
+    # unusual but not incoherent fact (the flag governs whether `null` is allowed, not whether a
+    # number is).
+    "sharedSystemMemory = true with a real vramMiB is still accepted" =
+      !(refused { devices.gpu0 = { vendor = "intel"; pciId = "0x8086"; sharedSystemMemory = true; vramMiB = 512; }; });
+    "sharedSystemMemory defaults to false" =
+      (deviceOf { devices.gpu0 = amd; } "gpu0").sharedSystemMemory == false;
+
     # ── hasRenderNode: a FACT, defaulted per bus ────────────────────────────────────────────
     # A DRM driver has a render node iff its `drm_driver` sets DRIVER_RENDER -- decided at compile
     # time, identical on every host running that driver. evdi never sets it, in any version.

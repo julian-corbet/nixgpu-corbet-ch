@@ -257,7 +257,7 @@ let
   # an inventory is a fact table other repos mirror (nixhost reads it as `resources.gpu`), so an
   # entry that cannot say what it is is wrong data whether or not this host ever generates a rule.
   missingPciIdentity = lib.attrNames (lib.filterAttrs (_n: d: d.vendor == null || d.pciId == null) pciDevices);
-  missingPciVram = lib.attrNames (lib.filterAttrs (_n: d: d.vramMiB == null) pciDevices);
+  missingPciVram = lib.attrNames (lib.filterAttrs (_n: d: d.vramMiB == null && !d.sharedSystemMemory) pciDevices);
   missingPlatformDriver = lib.attrNames (lib.filterAttrs (_n: d: d.driver == null) platformDevices);
   # The reverse mistake: PCI fields on a platform entry. Not a typo to shrug at -- it means the
   # operator believes udev will match on something it cannot see, so the device they think they
@@ -462,13 +462,44 @@ in
               priority) is `pressureWatcher`'s job, reading live sysfs counters, not a static
               table.
 
-              REQUIRED for `bus = "pci"`: an inventory entry for a card that cannot say how big
-              it is is not worth having, and even a BMC/IPMI framebuffer has a real number here
-              (an ASPEED AST2500's embedded SDRAM is 16 MiB). Optional, and normally null, for
-              `bus = "platform"`: a virtual DRM device has no dedicated video memory at all -- it
-              composites into ordinary system RAM -- and null states that honestly, where any
-              positive number would be an invention. Set it on a platform device only if one
-              genuinely has a carveout.
+              REQUIRED for `bus = "pci"`, UNLESS `sharedSystemMemory` (below) is true: an
+              inventory entry for a card that cannot say how big it is is not worth having, and
+              even a BMC/IPMI framebuffer has a real number here (an ASPEED AST2500's embedded
+              SDRAM is 16 MiB). Optional, and normally null, for `bus = "platform"`: a virtual DRM
+              device has no dedicated video memory at all -- it composites into ordinary system
+              RAM -- and null states that honestly, where any positive number would be an
+              invention. Set it on a platform device only if one genuinely has a carveout.
+            '';
+          };
+
+          sharedSystemMemory = lib.mkOption {
+            type = lib.types.bool;
+            default = false;
+            example = true;
+            description = ''
+              True when this PCI device has no dedicated VRAM at all -- its graphics memory is
+              dynamically carved from ordinary system RAM by the driver, rather than living on a
+              fixed-size pool on the card. Every modern integrated GPU works this way (Intel
+              Xe/Arc iGPUs and AMD APUs alike): there is no static "how big is it" number to
+              report, the same way a `bus = "platform"` virtual device has none -- but this device
+              genuinely IS on the PCI bus (it has a real `vendor`/`pciId`), so it cannot reach that
+              existing escape hatch by declaring `bus = "platform"` without a second, worse
+              fabrication (a platform rule would silently match nothing for a device the kernel
+              actually attaches via PCI).
+
+              Setting this to `true` is what allows `vramMiB` to stay `null` on THIS device without
+              tripping `missingPciVram` -- and ONLY this device: the assertion still requires
+              `vramMiB` on every other `bus = "pci"` entry, because "nobody looked the number up
+              yet" and "this device genuinely has none" are different facts, and only this flag is
+              allowed to assert the second one. Verify before setting it, the same way any other
+              fact in this table should be verified: an iGPU with no `mem_info_vram_total`-style
+              sysfs file and a driver log describing a stolen-memory carve-out (not a static
+              figure) is the real signature to look for, not an assumption from "it's integrated
+              so it must share memory" -- some integrated parts (older ones, and some SoCs) do
+              carve out a genuinely fixed reservation, which belongs in `vramMiB` instead.
+
+              Default `false`: the common PCI case is a card with real, sizeable VRAM, and this
+              flag exists for the genuine exception, not as a way to skip looking the number up.
             '';
           };
 
@@ -965,12 +996,16 @@ in
     assertion = false;
     message = ''
       nixgpu.stableDevicePaths.devices entr(ies) ${lib.concatStringsSep ", " missingPciVram}
-      are on the PCI bus but do not declare `vramMiB`.
+      are on the PCI bus but do not declare `vramMiB` (and do not set `sharedSystemMemory`).
 
       Required for a PCI device, because there is no such device this could legitimately be silent
       about -- even a BMC/IPMI framebuffer has a real number (an ASPEED AST2500 has 16 MiB of
-      embedded SDRAM). `null` is reserved for the case it genuinely describes: a `bus = "platform"`
-      virtual device with no dedicated video memory at all.
+      embedded SDRAM). `null` is reserved for the two cases it genuinely describes: a
+      `bus = "platform"` virtual device with no dedicated video memory at all, or a PCI device with
+      `sharedSystemMemory = true` -- an integrated GPU whose graphics memory is dynamically carved
+      from system RAM rather than a fixed pool on the card (every modern Intel Xe/Arc iGPU and AMD
+      APU). If this device genuinely has no VRAM figure to report for that reason, set
+      `sharedSystemMemory = true` rather than inventing a number; otherwise, look the real one up.
     '';
   }
   ++ lib.optional (missingPlatformDriver != [ ]) {
