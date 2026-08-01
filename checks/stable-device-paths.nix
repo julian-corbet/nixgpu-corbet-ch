@@ -494,6 +494,104 @@ let
     "a device name using digits, underscore and hyphen is accepted" =
       !(refused { devices."gpu-0_1" = amd; });
 
+    # ── secondaryFunctions: the OTHER PCI functions of the same physical card ──────────────
+    #
+    # Shipped 2026-08-01 (commit 3387b01) with no test at all -- this section is that gap
+    # closed. The option records a FACT (another function of this card exists, at a sibling PCI
+    # address) and derives a read-only `devicePath` from it; it generates no udev rule of its
+    # own, which the last case below pins.
+    "devicePath resolves the /dev/snd/by-path spelling for subsystem = sound" =
+      (deviceOf {
+        devices.gpu0 = amd // {
+          address = "0000:0a:00.0";
+          secondaryFunctions.audio = { address = "0000:0a:00.1"; subsystem = "sound"; };
+        };
+      } "gpu0").secondaryFunctions.audio.devicePath
+        == "/dev/snd/by-path/pci-0000:0a:00.1";
+
+    # A device with no secondaryFunctions declared is unaffected -- the default (`{ }`) is inert.
+    "no secondaryFunctions declared defaults to an empty attrset" =
+      (deviceOf { devices.gpu0 = amd; } "gpu0").secondaryFunctions == { };
+    "a device with no secondaryFunctions is accepted exactly as before" =
+      accepts { devices.gpu0 = amd; };
+
+    # The enum rejects an unknown value at EVAL TIME, the same way `bus = "usb"` is rejected
+    # above -- before `devicePath`'s own `throw` branch (dead code today; reachable only if the
+    # enum ever grows a class with no matching `devicePath` branch) is ever in play.
+    "an unknown subsystem is rejected by the enum at eval time" =
+      !(accepts {
+        devices.gpu0 = amd // {
+          address = "0000:0a:00.0";
+          secondaryFunctions.audio = { address = "0000:0a:00.1"; subsystem = "video"; };
+        };
+      });
+
+    # THE SIBLING CHECK, tested both directions. A discrete GPU's audio function shares
+    # domain:bus:device with its DRM function, differing only in the function digit -- that is
+    # what "one PCI device, several functions" means in PCI config space, not a style preference
+    # (see options.nix's `secondaryFunctionSiblingMismatches` for the full argument on why a
+    # mismatch here is asserted rather than left as an unenforced description in the option's
+    # doc comment).
+    "a secondary function sharing the parent's domain:bus:device is accepted" =
+      !(refused {
+        devices.gpu0 = amd // {
+          address = "0000:0a:00.0";
+          secondaryFunctions.audio = { address = "0000:0a:00.1"; subsystem = "sound"; };
+        };
+      });
+    "a secondary function on a different DEVICE than the parent's is refused" =
+      refused {
+        devices.gpu0 = amd // {
+          address = "0000:0a:00.0";
+          secondaryFunctions.audio = { address = "0000:0a:01.1"; subsystem = "sound"; };
+        };
+      };
+    "a secondary function on a different BUS than the parent's is refused" =
+      refused {
+        devices.gpu0 = amd // {
+          address = "0000:0a:00.0";
+          secondaryFunctions.audio = { address = "0000:0b:00.1"; subsystem = "sound"; };
+        };
+      };
+    # Negative-space confirmation that the check is keyed on domain:bus:device and NOT on the
+    # whole address string differing at all: two functions that differ only in their function
+    # digit -- the normal, expected shape -- must not trip it, including with a second sibling
+    # beside the first.
+    "differing only in the function digit does not trip the sibling check" =
+      !(refused {
+        devices.gpu0 = amd // {
+          address = "0000:0a:00.0";
+          secondaryFunctions = {
+            audio = { address = "0000:0a:00.1"; subsystem = "sound"; };
+            other = { address = "0000:0a:00.2"; subsystem = "sound"; };
+          };
+        };
+      });
+    # The check has nothing to compare against when the PARENT itself declares no `address` --
+    # that gap is `address`'s own concern (it is optional; see that option's description), not
+    # this check's to also demand.
+    "the sibling check does not fire when the parent declares no address at all" =
+      !(refused {
+        devices.gpu0 = amd // {
+          secondaryFunctions.audio = { address = "0000:0a:00.1"; subsystem = "sound"; };
+        };
+      });
+
+    # THE POINT OF THE OPTION: it records a fact, it does not generate a rule. Declaring a
+    # secondary function -- including its optional `role` -- must not change the emitted udev
+    # rules by one byte, so nobody later "improves" this into generating a rule by accident.
+    "declaring a secondary function does not change the emitted udev rules at all" =
+      rulesOf {
+        devices.gpu0 = amd // {
+          address = "0000:0a:00.0";
+          secondaryFunctions.audio = {
+            address = "0000:0a:00.1";
+            subsystem = "sound";
+            role = "HDMI/DP audio out";
+          };
+        };
+      } == rulesOf { devices.gpu0 = amd // { address = "0000:0a:00.0"; }; };
+
     # ── toolchain.vendor vs the inventory, compared by PCI ID ───────────────────────────────
     # The two fields use different vocabularies on purpose, so they reconcile through pciId.
     "a toolchain vendor with no matching card is refused" =

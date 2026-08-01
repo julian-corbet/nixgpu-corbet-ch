@@ -281,6 +281,41 @@ let
       ))
     cfg.devices);
 
+  # ── secondaryFunctions: are the OTHER PCI functions of a card actually siblings of it? ──────
+  #
+  # `secondaryFunctions.<name>.address`'s own description states the constraint: "a SIBLING of
+  # the parent entry's `address`, differing only in the function digit". That is not a style
+  # preference -- it is what a PCI multi-function device IS: every function of one physical
+  # device shares the same domain:bus:device, differing only in the function digit, because that
+  # is the field PCI config space reserves for "which function of this device". An address that
+  # is not a sibling did not arrive by declaring a different, legitimate kind of card; it arrived
+  # by pasting the wrong PCI address into the wrong entry, and the failure mode is silent in
+  # exactly the way `addressBusMismatch` above already refuses to be silent about: `devicePath`
+  # still resolves to a real-looking `/dev/snd/by-path/pci-<addr>` string, it just names some
+  # OTHER function's device instead of this card's own.
+  #
+  # This IS made an assertion, not left as an unenforced description, for the same reason every
+  # other coherence check in this file is one rather than a comment: ungated on `enable` -- an
+  # inventory entry that names a device other than the one it claims to is wrong data whether or
+  # not any host plane ever reads a path from it. Checked only when the PARENT declares its own
+  # `address`: a parent that never states its own slot has nothing for "sibling" to mean, and
+  # `address` being unset there is `address`'s own concern (it is optional -- see that option's
+  # description), not something this check should also demand.
+  pciFunctionPrefix = address:
+    let m = builtins.match "([0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2})\\.[0-7]" address;
+    in if m == null then null else builtins.head m;
+
+  secondaryFunctionSiblingMismatches = lib.concatLists (lib.mapAttrsToList
+    (deviceName: device:
+      if device.address == null then
+        [ ]
+      else
+        map (fnName: "${deviceName}.secondaryFunctions.${fnName}")
+          (lib.attrNames (lib.filterAttrs
+            (_fnName: fn: pciFunctionPrefix fn.address != pciFunctionPrefix device.address)
+            device.secondaryFunctions)))
+    cfg.devices);
+
   # Definitions of `vendors` that did NOT come from this file.
   #
   # A `default` counts as a definition and is attributed to the declaring file, so a clean host
@@ -976,6 +1011,24 @@ in
       prefix in `cardPath`/`renderPath` for the device it is actually meant to name.
 
       Fix the address to match this device's `bus`, or fix `bus` if that is the one that is wrong.
+    '';
+  }
+  ++ lib.optional (secondaryFunctionSiblingMismatches != [ ]) {
+    assertion = false;
+    message = ''
+      nixgpu.stableDevicePaths.devices entr(ies) ${lib.concatStringsSep ", " secondaryFunctionSiblingMismatches}
+      declare a `secondaryFunctions` address that is not a SIBLING of the parent device's own
+      `address` -- same domain:bus:device, differing only in the function digit.
+
+      Every function of one physical PCI multi-function device shares domain:bus:device by
+      construction; that is what "one device, several functions" means in PCI config space. An
+      address here that does not share it did not arrive by declaring a different, legitimate
+      function -- it is the wrong PCI address in the wrong entry -- and `devicePath` would still
+      resolve to a real-looking `/dev/snd/by-path/pci-<addr>` string, just one that names some
+      OTHER function's device instead of this card's own.
+
+      Fix the address to share this device's own domain:bus:device, or move the entry to
+      whichever device it actually belongs to.
     '';
   }
   ++ lib.optional (unsafeDeviceNames != [ ]) {
