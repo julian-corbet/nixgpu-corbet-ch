@@ -455,6 +455,75 @@ in
             '';
           };
 
+          secondaryFunctions = lib.mkOption {
+            type = lib.types.attrsOf (lib.types.submodule ({ name, ... }: {
+              options = {
+                address = lib.mkOption {
+                  type = lib.types.strMatching pciAddressPattern;
+                  example = "0000:0a:00.1";
+                  description = ''
+                    This function's own PCI address -- a SIBLING of the parent entry's `address`,
+                    differing only in the function digit (`…:00.0` vs `…:00.1`).
+                  '';
+                };
+                subsystem = lib.mkOption {
+                  type = lib.types.enum [ "sound" ];
+                  example = "sound";
+                  description = ''
+                    Which kernel subsystem owns this function's device nodes, and therefore which
+                    `by-path` directory names it. Only `"sound"` today -- the enum exists so that
+                    adding a class is a deliberate act with a `devicePath` branch behind it, rather
+                    than a free-text string silently producing a path nothing creates.
+                  '';
+                };
+                role = lib.mkOption {
+                  type = lib.types.nullOr lib.types.str;
+                  default = null;
+                  example = "HDMI/DP audio out";
+                  description = "What this function is FOR, in the operator's words. Never branched on -- see the parent `role`.";
+                };
+                devicePath = lib.mkOption {
+                  type = lib.types.str;
+                  readOnly = true;
+                  default =
+                    if config.secondaryFunctions.${name}.subsystem == "sound"
+                    then "/dev/snd/by-path/pci-${config.secondaryFunctions.${name}.address}"
+                    else throw "nixgpu: no devicePath branch for subsystem ${config.secondaryFunctions.${name}.subsystem}";
+                  description = ''
+                    The stable path to this function's device node, by SUBSYSTEM rather than by
+                    index: `/dev/snd/by-path/pci-<address>` for `subsystem = "sound"`. ALSA card
+                    indices (`controlC1`) renumber exactly like DRM ones do -- the by-path spelling
+                    is the identity, the index is only where it happens to be this boot.
+                  '';
+                };
+              };
+            }));
+            default = { };
+            example = lib.literalExpression ''{ audio = { address = "0000:0a:00.1"; subsystem = "sound"; }; }'';
+            description = ''
+              The OTHER PCI functions of this same physical card. A discrete GPU is not one device:
+              it is a multi-function PCI card whose DRM node is one function and whose HDMI/DP audio
+              controller is another, at a sibling address. `address` above names the DRM function
+              only, so without this the rest of the card is invisible to an inventory that claims to
+              record where devices are.
+
+              WHY IT MATTERS, and it is not bookkeeping. A consumer fencing a session away from a
+              GPU has to fence the whole CARD -- excluding the DRM node while leaving its audio
+              controller reachable is a fence with a hole in it shaped exactly like the device it was
+              built to exclude. And the reverse: a consumer that SHOULD have the card (a desktop that
+              owns the display) needs its audio out too, and should name it rather than hand-writing
+              a PCI path into an LXC config or a `DeviceAllow=` line, which is precisely the kind of
+              hand-written device reference this whole module exists to end.
+
+              POLICY IS NOT HERE, same rule as `role`: this records that the function EXISTS and
+              where. Who may reach it -- which session, which container, whether compute and video
+              encode go somewhere different from audio -- belongs to whatever claims the device, not
+              to the table recording it. A card whose render node serves compute jobs while its audio
+              belongs to one desktop and its DRM master to another is an ordinary arrangement, and
+              nothing here should make it harder to express.
+            '';
+          };
+
           address = lib.mkOption {
             # A single alternation covering both valid SHAPES (PCI domain:bus:device.function, or
             # a platform device name) -- the type can prove "well-formed for SOME bus" but not
