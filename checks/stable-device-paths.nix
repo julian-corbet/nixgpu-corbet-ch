@@ -485,6 +485,63 @@ let
         SUBSYSTEM=="drm", KERNEL=="card[0-9]*", KERNELS=="evdi.0", SYMLINK+="dri/by-name/dock-card"
       '';
 
+    # ── boundLocally: a consumer whose /dev is a renamed subset of the host's ─────────────────
+    #
+    # See options.nix's header, "A FIFTH STRUCTURAL LIMIT", for the full shape this closes: a
+    # container that shares its host's sysfs unnamespaced (so the rule below still MATCHES) while
+    # keeping a private /dev that never received this device's node at the number the rule would
+    # derive. `boundLocally` defaults to `true`, so every case above -- none of which set it --
+    # is the baseline this section's cases are diffed against.
+    "boundLocally defaults to true" =
+      (deviceOf { devices.gpu0 = amd; } "gpu0").boundLocally == true;
+
+    # THE POINT OF THE OPTION: `false` suppresses every rule family for this device -- by-vendor,
+    # by-driver, by-name alike -- while the device stays in `devices` itself (forced deeply above
+    # by `accepts`, which never touches `rules`).
+    "boundLocally = false generates no by-vendor rule" =
+      rulesOf { devices.gpu0 = amd // { boundLocally = false; }; } == "";
+    "boundLocally = false generates no by-driver rule" =
+      rulesOf { devices.dock = evdi // { boundLocally = false; }; } == "";
+    "boundLocally = false generates no by-name rule even with address set" =
+      rulesOf { devices.gpu0 = amd // { address = "0000:0a:00.0"; boundLocally = false; }; } == "";
+    "boundLocally = false does not remove the device from the inventory" =
+      accepts { devices.gpu0 = amd // { boundLocally = false; }; }
+      && (deviceOf { devices.gpu0 = amd // { boundLocally = false; }; } "gpu0").boundLocally == false;
+
+    # A mixed inventory: only the bound-locally device gets rules, and the other's absence must
+    # not disturb them (this is a real dual-GPU desktop shape -- one card genuinely reachable
+    # here, one that is not).
+    "boundLocally = false on one device leaves the other's rules untouched" =
+      rulesOf {
+        devices = {
+          gpu0 = amd // { address = "0000:0a:00.0"; };
+          ast = ast // { address = "0000:04:00.0"; hasRenderNode = false; boundLocally = false; };
+        };
+      } == ''
+        SUBSYSTEM=="drm", KERNEL=="card[0-9]*", ATTRS{vendor}=="0x1002", SYMLINK+="dri/by-vendor/amd-card"
+        SUBSYSTEM=="drm", KERNEL=="renderD[0-9]*", ATTRS{vendor}=="0x1002", SYMLINK+="dri/by-vendor/amd-render"
+        SUBSYSTEM=="drm", KERNEL=="card[0-9]*", KERNELS=="0000:0a:00.0", SYMLINK+="dri/by-name/gpu0-card"
+        SUBSYSTEM=="drm", KERNEL=="renderD[0-9]*", KERNELS=="0000:0a:00.0", SYMLINK+="dri/by-name/gpu0-render"
+      '';
+
+    # `boundLocally = false` must not make an otherwise-invalid entry pass -- it is an exemption
+    # from RULE GENERATION, never from the inventory's own correctness checks (the same relation
+    # `sharedSystemMemory` has to `missingPciVram`).
+    "boundLocally = false does not exempt a device from its own required fields" =
+      refused { devices.gpu0 = { vendor = "amd"; boundLocally = false; }; };
+
+    # boundLocally = false removes a device from the same-vendor AMBIGUITY check too, not only
+    # from `rules` -- correct, because a device excluded from rule generation cannot collide with
+    # a sibling's rule it will never produce.
+    "two same-vendor devices, one boundLocally = false, are not ambiguous" =
+      !(refused {
+        enable = true;
+        devices = {
+          gpu0 = amd;
+          gpu1 = amd // { vramMiB = 8192; boundLocally = false; };
+        };
+      });
+
     # THE POINT OF THE FAMILY: two devices sharing a vendor are refused a distinct `by-vendor`
     # symlink (see the ambiguity case below), but each still gets its OWN, unambiguous `by-name`
     # rule the moment each carries its own `address` -- because `KERNELS==` matches the SLOT, and
@@ -648,7 +705,7 @@ let
         nixgpu.toolchain.vendor = "amd";
         nixgpu.stableDevicePaths.devices.evdi = evdi;
       });
-    # The real devhome shape: ASPEED framebuffer + AMD card, toolchain wants AMD.
+    # The real dual-GPU desktop shape: ASPEED framebuffer + AMD card, toolchain wants AMD.
     "an ASPEED framebuffer beside the matching AMD card is accepted" =
       !(refusedBoth {
         nixgpu.toolchain.vendor = "amd";
