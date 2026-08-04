@@ -195,7 +195,7 @@ let
       "packageNames: ${builtins.toJSON policyNoVendorProbes.nixgpu.toolchain.packageNames}")
 
     (check "policy/probes-never-pull-intel-diagnostics"
-      (!(lib.elem "intel-gpu-tools" policyIntelProbes.nixgpu.toolchain.archPackages)
+      (!(lib.elem "intel-gpu-tools" policyIntelProbes.nixgpu.toolchain.archPackages))
       "archPackages: ${builtins.toJSON policyIntelProbes.nixgpu.toolchain.archPackages}")
 
     (check "policy/diagnostics-adds-only-vendor-entries-once-a-vendor-is-set"
