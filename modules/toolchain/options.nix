@@ -1,29 +1,81 @@
-# modules/toolchain/options.nix — the HOST-side GPU compute toolchain: which vendor's runtime a
-# machine needs on the metal, declared once and resolved per platform.
+# modules/toolchain/options.nix — the HOST-side GPU compute toolchain: two questions about one
+# card, both declared once and resolved per platform. See ./README.md for the full design (the
+# vendor × capability × platform model, and the boundary this module draws against nixllm).
 #
 # LEVEL 1 (nixosModules/systemManagerModules): a fact about the host itself -- true
 # whether or not anything ever contends for the card. Not part of the Level 2 / edge
 # arbitration modules (device-tokens, priority-ladder, pressure-watcher, ondemand-front);
 # see the repo README's "Levels".
 #
-# WHY THIS BELONGS IN nixgpu. Everything else here is about SHARING a GPU that already works --
-# advertising lanes (device-tokens), ordering claimants (priority-ladder), evicting under pressure
-# (pressure-watcher), queuing (ondemand-front), and keeping device paths stable
-# (stable-device-paths). All of it presupposes a working vendor runtime, and none of it installs
-# one. That gap meant nixgpu had nothing to say to a machine that is not already a Kubernetes node
-# -- an Arch workstation with an RX 6800 got no help from the GPU project at all.
+# TWO AXES, NOT ONE. `vendor` answers "which silicon" -- unchanged from this module's first
+# version, including the PCI-ID coherence check against `stableDevicePaths` below. `capabilities.*`
+# answers "for what": display, hardware video, compute, AI inference, 32-bit gaming, container
+# exposure, diagnostics -- see ../../lib/catalogue.nix for the vendor × platform table each one
+# resolves through. The OLD version of this option only ever answered "which vendor, plus one
+# binary sdk/monitoring toggle" -- too coarse to say "give me VA-API but not the multi-gigabyte
+# ROCm SDK" without reaching for the `extraPackages` escape hatch (which is exactly how the one
+# real VA-API gap this catalogue closes -- intel-media-driver -- was declared before this module
+# grew a `videoAccel` capability of its own).
 #
-# This module closes that. It is deliberately the SMALLEST possible statement: which vendor, and
-# whether to include the compute SDK on top of the plain runtime. It does not curate a persona, an
-# editor list, or a Python stack -- those are a machine class, not a GPU concern, and they live in
-# nixdev.
-#
-# PLANE IMPLEMENTATIONS live beside this file: nixos.nix resolves to nixpkgs attributes,
-# system-manager.nix to pacman names. Package names are not portable across platforms and this is
-# the one place in nixgpu where that bites, so each plane carries its own real implementation
-# rather than a shim over a shared list. Same shape nixram and nixdev already use.
+# EVERY CAPABILITY DEFAULTS OFF, deliberately DIFFERENT from the two booleans it replaces (`sdk`
+# and `monitoring` both defaulted ON). With two flags, "everything on once you opt in" was a
+# reasonable floor. With seven -- several of them situational (gaming32, containerExposure) rather
+# than broadly useful -- the same default would hand every host that enables this module a 32-bit
+# gaming stack and a container runtime hook it never asked for. This module's own catalogue is
+# closer in spirit to nixfs's `filesystems` option (declare what you actually need) than to its
+# `tools.*` (a generic toolkit everyone wants); see ../../lib/catalogue.nix's own header. No live
+# host depended on the old default -- CORBET-ELITEBOOK already overrides both flags to `false`
+# explicitly, and no other host composes this module yet -- so flipping it costs nothing today.
 { lib, config, ... }:
 let
+  cfg = config.nixgpu.toolchain;
+
+  catalogue = import ../../lib/catalogue.nix { };
+  resolve = import ../../lib/resolve.nix { inherit lib; };
+
+  capabilityNames = lib.attrNames catalogue;
+
+  mkCapabilityOption = name: {
+    enable = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = ''
+        ${catalogue.${name}.summary}
+
+        Off by default -- see this file's own header for why every capability here starts off
+        rather than mirroring the old sdk/monitoring pair's "everything on once enabled" default.
+      '';
+    };
+  };
+
+  # Attaches an identity: the entry's own `arch` name if it has one, else its `nixpkgs` name.
+  # Neither channel is guaranteed present (see ../../lib/catalogue.nix's own header -- this
+  # catalogue genuinely uses `arch = null` and `nixpkgs = null` both), so neither can be assumed;
+  # exactly one of them always is, for every real entry in the catalogue today.
+  withIdentity = entry: entry // {
+    name = if (entry.arch or null) != null then entry.arch else entry.nixpkgs;
+  };
+
+  enabledCapabilities = lib.filter (c: cfg.capabilities.${c}.enable) capabilityNames;
+
+  # Vendor-neutral entries: apply whenever the capability is enabled, regardless of `vendor` --
+  # today only `diagnostics` carries any (mesa-demos/libva-utils/wayland-utils query whatever GPU
+  # is present). `or [ ]` catches every capability that has no `neutral` bucket at all, which Nix's
+  # `or` resolves across the WHOLE chain (`catalogue.${cap}.neutral.packages`), not just its last
+  # segment -- verified: a missing `neutral` attribute falls through exactly the same as a missing
+  # `packages` attribute under a present one.
+  neutralEntries = cap: map withIdentity (catalogue.${cap}.neutral.packages or [ ]);
+
+  # Vendor-specific entries: nothing at all when `vendor == null` -- an unselected vendor
+  # contributes nothing, by construction, not by a filter that could be forgotten.
+  vendorEntries = cap:
+    if cfg.vendor == null then [ ]
+    else map withIdentity (catalogue.${cap}.vendors.${cfg.vendor}.packages or [ ]);
+
+  selectedEntries = lib.unique (
+    lib.concatMap (cap: neutralEntries cap ++ vendorEntries cap) enabledCapabilities
+  );
+
   # Canonical PCI vendor IDs for the vendors this module's enum dispatches on. Catalogue facts
   # about the hardware, not a choice: these are what `/sys/class/drm/cardN/device/vendor` reports.
   #
@@ -66,7 +118,7 @@ in
 {
   options.nixgpu.toolchain = {
     enable = lib.mkEnableOption ''
-      installing a GPU vendor's compute runtime on this host.
+      installing a GPU vendor's compute runtime and/or workload capabilities on this host.
 
       Off by default: plenty of machines have a GPU they only ever use for display, and a compute
       SDK is a large install to happen by accident
@@ -76,39 +128,19 @@ in
       type = lib.types.nullOr (lib.types.enum [ "nvidia" "amd" "intel" ]);
       default = null;
       description = ''
-        Which vendor's compute runtime this host needs, or null for none.
+        Which vendor's silicon this host has, or null for none.
 
         Deliberately not auto-detected. Detection would have to run at evaluation time, on a
         machine that may not be the target, and a wrong guess installs several gigabytes of the
         wrong SDK. Declaring it is one line and is always correct.
+
+        Gates every `capabilities.*` entry's VENDOR-SPECIFIC packages (../../lib/catalogue.nix):
+        `vendor = null` with any capability enabled installs only that capability's vendor-neutral
+        entries, if it has any -- an unselected vendor contributes nothing, never a guess.
       '';
     };
 
-    sdk = lib.mkOption {
-      type = lib.types.bool;
-      default = true;
-      description = ''
-        Include the full compute SDK (CUDA / ROCm / oneAPI-class), not just the userspace driver
-        runtime.
-
-        Set false on a host that only needs to RUN GPU workloads built elsewhere -- a Kubernetes
-        node pulling prebuilt images, for instance, where the container carries its own toolkit and
-        the host only has to expose a working device. That is the common case for a cluster member
-        and the reason this is separable at all.
-      '';
-    };
-
-    monitoring = lib.mkOption {
-      type = lib.types.bool;
-      default = true;
-      description = ''
-        Include the vendor's own monitoring/query tool (nvidia-smi, rocm-smi, intel_gpu_top class).
-
-        On by default because every other module in this project is about contention, and the
-        first question any contention investigation asks is "what is on the card right now" --
-        which needs this tool present before the incident, not after.
-      '';
-    };
+    capabilities = lib.genAttrs capabilityNames mkCapabilityOption;
 
     extraPackages = lib.mkOption {
       type = lib.types.listOf lib.types.str;
@@ -116,7 +148,72 @@ in
       description = ''
         Escape hatch: additional package names appended verbatim, in whatever naming the active
         plane uses (nixpkgs attribute paths on NixOS, pacman names on Arch). Portability of these
-        is the consumer's problem -- the tables above stay curated.
+        is the consumer's problem -- the catalogue above stays curated.
+      '';
+    };
+
+    # ── Computed, read-only ──────────────────────────────────────────────────────────────────
+    want = lib.mkOption {
+      type = lib.types.listOf lib.types.attrs;
+      readOnly = true;
+      internal = true;
+      description = "Resolved entries from ../../lib/catalogue.nix; the contract a platform backend consumes.";
+    };
+
+    packageNames = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      readOnly = true;
+      description = ''
+        The resolved selection as nixpkgs attribute paths (dot-separated, e.g.
+        "rocmPackages.clr"). The contract ./nixos.nix consumes.
+      '';
+    };
+
+    archPackages = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      readOnly = true;
+      description = ''
+        The selected packages as official-repo pacman names, for the host's own reconciler. This
+        module's ./system-manager.nix already wires this into `nixarch.packages.pacman` directly
+        (unlike the sibling nixfs, which publishes and leaves wiring to the host -- see that
+        module's own header for why nixfs decouples and why this one does not need to: toolchain
+        has done the direct wiring since its first version, and no consumer benefits from breaking
+        that now). Published anyway, read-only, so a host or a check can see what it will install
+        without instantiating anything.
+      '';
+    };
+
+    aurPackages = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      readOnly = true;
+      description = ''
+        Selections that live in the AUR rather than an official repo, kept SEPARATE because
+        `pacman -S` cannot resolve them -- it fails the whole transaction with "target not found".
+        `intel-oneapi-basekit-2025` and `openvino-bin` are AUR today; wired into
+        `nixarch.packages.aur` the same way `archPackages` is wired into `nixarch.packages.pacman`.
+      '';
+    };
+
+    unavailableOnArch = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      readOnly = true;
+      description = ''
+        Selected entries with no Arch package at all (official repo or AUR), named by catalogue
+        identity. Empty for the real catalogue today -- every entry has a live Arch/AUR source --
+        kept alive by a fixture in ../../checks/toolchain.nix, same mechanism as nixfs.
+      '';
+    };
+
+    unavailableOnNixos = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      readOnly = true;
+      description = ''
+        Selected entries with no nixpkgs attribute at all, named by catalogue identity. NOT empty
+        for the real catalogue -- `gaming32` and several `display` entries genuinely have no
+        nixpkgs package (the NixOS answer is an option, not a package; see ./nixos.nix and
+        ../../lib/catalogue.nix's own header) -- so a NixOS host enabling one of those capabilities
+        sees exactly which of its selected entries install nothing on that plane, and why, rather
+        than a silent gap.
       '';
     };
   };
@@ -139,23 +236,32 @@ in
   # a host may legitimately declare a compute vendor with no inventory at all, or an inventory
   # made up entirely of platform devices (a laptop that has recorded its DisplayLink `evdi` card
   # and not yet its iGPU).
-  config.assertions = lib.optional vendorContradiction {
-    assertion = false;
-    message = ''
-      nixgpu.toolchain.vendor = "${config.nixgpu.toolchain.vendor}" wants the
-      ${config.nixgpu.toolchain.vendor} compute runtime (PCI vendor ${wantedPciId}), but
-      nixgpu.stableDevicePaths.devices lists no device with that PCI vendor ID.
+  config = {
+    assertions = lib.optional vendorContradiction {
+      assertion = false;
+      message = ''
+        nixgpu.toolchain.vendor = "${config.nixgpu.toolchain.vendor}" wants the
+        ${config.nixgpu.toolchain.vendor} runtime (PCI vendor ${wantedPciId}), but
+        nixgpu.stableDevicePaths.devices lists no device with that PCI vendor ID.
 
-      Declared PCI inventory: ${lib.concatStringsSep ", " (lib.mapAttrsToList (n: d: "${n} = ${d.pciId}") pciInventory)}
+        Declared PCI inventory: ${lib.concatStringsSep ", " (lib.mapAttrsToList (n: d: "${n} = ${d.pciId}") pciInventory)}
 
-      These are two statements about the same silicon and they disagree. One of them is a typo --
-      most often a host declaration copy-pasted from a machine with a different card, where the
-      inventory was updated for the new hardware and the toolchain vendor was not, or the reverse.
+        These are two statements about the same silicon and they disagree. One of them is a typo --
+        most often a host declaration copy-pasted from a machine with a different card, where the
+        inventory was updated for the new hardware and the toolchain vendor was not, or the reverse.
 
-      Note the two fields use different vocabularies deliberately, so they are compared by PCI ID,
-      not by name: `toolchain.vendor` is a closed enum this module dispatches on to pick a runtime,
-      while `devices.<name>.vendor` is the operator's own free-form grouping word. Fix whichever of
-      the two is wrong about the hardware; do not rename a device to match.
-    '';
+        Note the two fields use different vocabularies deliberately, so they are compared by PCI ID,
+        not by name: `toolchain.vendor` is a closed enum this module dispatches on to pick a runtime,
+        while `devices.<name>.vendor` is the operator's own free-form grouping word. Fix whichever of
+        the two is wrong about the hardware; do not rename a device to match.
+      '';
+    };
+
+    nixgpu.toolchain.want = selectedEntries;
+    nixgpu.toolchain.packageNames = resolve.packageNames selectedEntries;
+    nixgpu.toolchain.archPackages = resolve.archPackages selectedEntries;
+    nixgpu.toolchain.aurPackages = resolve.aurPackages selectedEntries;
+    nixgpu.toolchain.unavailableOnArch = resolve.unavailableOnArch selectedEntries;
+    nixgpu.toolchain.unavailableOnNixos = resolve.unavailableOnNixos selectedEntries;
   };
 }

@@ -167,16 +167,28 @@ NixOS host.
   nixpkgs' own X11-keyed DisplayLink module; the Arch plane carries the
   dependency override that stops one unsatisfiable `evdi` dependency from
   aborting the AUR reconcile for every package on the box.
-- **`toolchain`** *(NixOS + system-manager)* — the vendor compute runtime:
-  CUDA / ROCm / oneAPI-class, plus the vendor's own monitoring tool.
+- **`toolchain`** *(NixOS + system-manager)* — **vendor × capability × platform**: which
+  silicon this host has, and what it wants to DO with it (display, hardware
+  video, compute, AI inference, 32-bit gaming, container exposure, diagnostics),
+  resolved to real package names per plane. See
+  [modules/toolchain/README.md](modules/toolchain/README.md) for the full design
+  and the boundary this module draws against the sibling
+  [nixllm](https://github.com/julian-corbet/nixllm-corbet-ch) project.
 
   ```nix
-  nixgpu.toolchain = { enable = true; vendor = "amd"; };
+  nixgpu.toolchain = {
+    enable = true;
+    vendor = "amd";
+    capabilities.compute.enable = true;   # ROCm, on top of the plain driver runtime
+    capabilities.diagnostics.enable = true; # rocm-smi, rocminfo, mesa-demos, ...
+  };
   ```
 
-  `sdk = false` keeps monitoring but drops the multi-gigabyte SDK — the right
-  shape for a cluster node running prebuilt images, where the container carries
-  its own toolkit and the host only has to expose a working device.
+  Every capability defaults OFF — a cluster node running prebuilt images (whose
+  containers carry their own toolkit) wants `diagnostics` only, not the
+  multi-gigabyte compute SDK; a workstation wants more. See
+  `lib/catalogue.nix` for what each capability installs, per vendor, per plane,
+  and why.
 
   Each plane carries its own real implementation rather than a shared list with
   a translation table, because the platforms disagree about more than spelling:
@@ -184,7 +196,9 @@ NixOS host.
   userspace driver is a package on Arch but a *hardware option* on NixOS. The
   NixOS module deliberately does not configure `hardware.nvidia` — driver choice
   belongs to whoever knows the machine — and warns if the toolkit would install
-  with no driver behind it.
+  with no driver behind it. On the Arch plane, this module never reaches into
+  nixpkgs at all: a selected package comes from pacman/AUR, structurally, not
+  merely by convention — see `modules/toolchain/system-manager.nix`'s own header.
 
 ## Status
 

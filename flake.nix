@@ -187,6 +187,15 @@
             pkgs = nixpkgs.legacyPackages.${system};
             inherit probeFact;
           };
+
+          # The vendor × capability × platform model (../lib/catalogue.nix, ../lib/resolve.nix,
+          # ./modules/toolchain/). Not covered by any check above -- `all-modules-render` renders
+          # only `nixidyModules` (Level 2/edge), and `toolchain` is Level 1, offered on both the
+          # NixOS and system-manager planes like stableDevicePaths/evdi/displaylink above.
+          toolchain = import ./checks/toolchain.nix {
+            pkgs = nixpkgs.legacyPackages.${system};
+            inherit nixpkgs system;
+          };
         });
 
       formatter = forAllSystems (system: nixpkgs.legacyPackages.${system}.nixpkgs-fmt);
