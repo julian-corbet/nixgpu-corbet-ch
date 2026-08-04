@@ -28,11 +28,11 @@
 # copied from the generic vendor advice that named some of these. Where that live check overturned
 # the generic advice, the entry's own comment says so.
 #
-# NEUTRAL vs VENDOR. Most capabilities vary by vendor; `diagnostics` alone also carries a `neutral`
-# bucket -- packages that query WHATEVER GPU is present (mesa-demos' glxinfo, libva-utils' vainfo,
+# NEUTRAL vs VENDOR. Most capabilities vary by vendor. `probes` alone carries a `neutral` bucket:
+# packages that query WHATEVER GPU is present (mesa-demos' glxinfo, libva-utils' vainfo,
 # wayland-utils' wayland-info) and therefore apply regardless of `vendor`, even `vendor = null`.
-# Nothing else in this table has a neutral bucket because nothing else is vendor-agnostic: a Vulkan
-# ICD, a VA-API driver, a compute SDK are all real per-silicon artifacts.
+# `diagnostics` is deliberately vendor-specific telemetry; a Vulkan ICD, VA-API driver, compute
+# SDK, or vendor monitor is a real per-silicon artifact.
 #
 { ... }:
 {
@@ -232,10 +232,8 @@
     };
   };
 
-  diagnostics = {
-    summary = "Ask the card what it is actually doing -- the first thing any contention investigation reaches for, and the reason this project's own README opens with a VRAM-pressure story.";
-    # Applies to EVERY host with this capability enabled, regardless of `vendor` (even `vendor =
-    # null`) -- these tools query whatever GPU is present, not one vendor's silicon.
+  probes = {
+    summary = "Inspect the active graphics stack without assuming a GPU vendor -- OpenGL, VA-API, and Wayland probes that are useful on any graphics-capable host.";
     neutral.packages = [
       # Arch names the project "mesa-utils" (glxinfo/glxgears); nixpkgs renamed its own package to
       # follow upstream's own rename to "mesa-demos" and dropped the old attribute entirely
@@ -246,6 +244,10 @@
       { arch = "libva-utils"; nixpkgs = "libva-utils"; }
       { arch = "wayland-utils"; nixpkgs = "wayland-utils"; }
     ];
+  };
+
+  diagnostics = {
+    summary = "Ask this vendor's card what it is actually doing -- the telemetry needed when a contention investigation reaches the GPU itself.";
     vendors = {
       amd.packages = [
         { arch = "rocm-smi-lib"; nixpkgs = "rocmPackages.rocm-smi"; }

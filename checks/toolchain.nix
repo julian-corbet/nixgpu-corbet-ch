@@ -130,7 +130,8 @@ let
   policyAmdCompute = evalPolicy { nixgpu.toolchain.vendor = "amd"; nixgpu.toolchain.capabilities.compute.enable = true; };
   policyIntelCompute = evalPolicy { nixgpu.toolchain.vendor = "intel"; nixgpu.toolchain.capabilities.compute.enable = true; };
   policyNvidiaCompute = evalPolicy { nixgpu.toolchain.vendor = "nvidia"; nixgpu.toolchain.capabilities.compute.enable = true; };
-  policyNoVendorDiagnostics = evalPolicy { nixgpu.toolchain.capabilities.diagnostics.enable = true; };
+  policyNoVendorProbes = evalPolicy { nixgpu.toolchain.capabilities.probes.enable = true; };
+  policyIntelProbes = evalPolicy { nixgpu.toolchain.vendor = "intel"; nixgpu.toolchain.capabilities.probes.enable = true; };
   policyAmdDiagnostics = evalPolicy { nixgpu.toolchain.vendor = "amd"; nixgpu.toolchain.capabilities.diagnostics.enable = true; };
   policyEverything = evalPolicy {
     nixgpu.toolchain.vendor = "intel";
@@ -186,15 +187,19 @@ let
       )
       "amd + aiInference resolved a non-empty want, but the catalogue's amd.aiInference cell is empty")
 
-    # ── neutral entries apply regardless of vendor, INCLUDING vendor = null ──────────────────
-    (check "policy/diagnostics-neutral-entries-apply-with-no-vendor-selected"
-      (lib.elem "mesa-demos" policyNoVendorDiagnostics.nixgpu.toolchain.packageNames
-        && lib.elem "libva-utils" policyNoVendorDiagnostics.nixgpu.toolchain.packageNames
-        && lib.elem "wayland-utils" policyNoVendorDiagnostics.nixgpu.toolchain.packageNames)
-      "packageNames: ${builtins.toJSON policyNoVendorDiagnostics.nixgpu.toolchain.packageNames}")
+    # ── neutral probes apply regardless of vendor, while diagnostics remains vendor-specific ──
+    (check "policy/probes-neutral-entries-apply-with-no-vendor-selected"
+      (lib.elem "mesa-demos" policyNoVendorProbes.nixgpu.toolchain.packageNames
+        && lib.elem "libva-utils" policyNoVendorProbes.nixgpu.toolchain.packageNames
+        && lib.elem "wayland-utils" policyNoVendorProbes.nixgpu.toolchain.packageNames)
+      "packageNames: ${builtins.toJSON policyNoVendorProbes.nixgpu.toolchain.packageNames}")
 
-    (check "policy/diagnostics-adds-vendor-entries-on-top-of-neutral-ones-once-a-vendor-is-set"
-      (lib.elem "mesa-demos" policyAmdDiagnostics.nixgpu.toolchain.packageNames
+    (check "policy/probes-never-pull-intel-diagnostics"
+      (!(lib.elem "intel-gpu-tools" policyIntelProbes.nixgpu.toolchain.archPackages)
+      "archPackages: ${builtins.toJSON policyIntelProbes.nixgpu.toolchain.archPackages}")
+
+    (check "policy/diagnostics-adds-only-vendor-entries-once-a-vendor-is-set"
+      (!(lib.elem "mesa-demos" policyAmdDiagnostics.nixgpu.toolchain.packageNames)
         && lib.elem "rocminfo" policyAmdDiagnostics.nixgpu.toolchain.archPackages
         && lib.elem "radeontop" policyAmdDiagnostics.nixgpu.toolchain.archPackages)
       "packageNames: ${builtins.toJSON policyAmdDiagnostics.nixgpu.toolchain.packageNames}, archPackages: ${builtins.toJSON policyAmdDiagnostics.nixgpu.toolchain.archPackages}")
@@ -267,6 +272,7 @@ let
 
   cfg-nixos-amd-compute = evalNixos { nixgpu.toolchain.enable = true; nixgpu.toolchain.vendor = "amd"; nixgpu.toolchain.capabilities.compute.enable = true; };
   cfg-nixos-gaming32 = evalNixos { nixgpu.toolchain.enable = true; nixgpu.toolchain.vendor = "amd"; nixgpu.toolchain.capabilities.gaming32.enable = true; };
+  cfg-nixos-intel-probes = evalNixos { nixgpu.toolchain.enable = true; nixgpu.toolchain.vendor = "intel"; nixgpu.toolchain.capabilities.probes.enable = true; };
 
   nixosChecks = [
     (check "nixos/installs-the-runtime-baseline-and-every-resolved-package"
@@ -291,6 +297,14 @@ let
       (cfg-nixos-gaming32.hardware.graphics.enable32Bit == true
         && cfg-nixos-amd-compute.hardware.graphics.enable32Bit == false)
       "gaming32 host enable32Bit: ${toString cfg-nixos-gaming32.hardware.graphics.enable32Bit}, compute-only host enable32Bit: ${toString cfg-nixos-amd-compute.hardware.graphics.enable32Bit}")
+
+    (check "nixos/probes-install-neutral-tools-without-intel-diagnostics"
+      (
+        let installedOutPaths = map (p: p.outPath) cfg-nixos-intel-probes.environment.systemPackages;
+        in lib.all (n: lib.elem (outPathOf n) installedOutPaths) [ "mesa-demos" "libva-utils" "wayland-utils" ]
+          && !(lib.elem pkgs.intel-gpu-tools cfg-nixos-intel-probes.environment.systemPackages)
+      )
+      "environment.systemPackages did not contain exactly the neutral probes")
 
     (check "nixos/nvidia-without-hardware-nvidia-warns"
       (
@@ -369,6 +383,14 @@ let
         in lib.elem "rocm-hip-sdk" c.nixarch.packages.pacman
       )
       "nixarch.packages.pacman did not contain rocm-hip-sdk")
+
+    (check "arch/probes-publish-neutral-tools-without-intel-diagnostics"
+      (
+        let c = evalSm { nixgpu.toolchain.enable = true; nixgpu.toolchain.vendor = "intel"; nixgpu.toolchain.capabilities.probes.enable = true; };
+        in lib.all (p: lib.elem p c.nixarch.packages.pacman) [ "mesa-utils" "libva-utils" "wayland-utils" ]
+          && !(lib.elem "intel-gpu-tools" c.nixarch.packages.pacman)
+      )
+      "nixarch.packages.pacman leaked vendor telemetry into probes")
 
     (check "arch/publishes-aurPackages-into-nixarch-packages-aur-not-pacman"
       (

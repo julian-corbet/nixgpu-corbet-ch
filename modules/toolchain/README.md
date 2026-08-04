@@ -14,7 +14,8 @@ matters at all.
    of the wrong SDK, and declaring it is one line.
 
 2. **Capability** -- `nixgpu.toolchain.capabilities.*`, one boolean per WORKLOAD: `display`,
-   `videoAccel`, `compute`, `aiInference`, `gaming32`, `containerExposure`, `diagnostics`. This is
+   `videoAccel`, `compute`, `aiInference`, `gaming32`, `containerExposure`, `probes`,
+   `diagnostics`. This is
    the new axis. The old version of this module had exactly two booleans (`sdk`, `monitoring`) --
    coarse enough that the one real gap this catalogue closes (Intel VA-API on the elitebook) had
    to be declared through the `extraPackages` escape hatch rather than as a first-class selection.
@@ -44,7 +45,7 @@ matters at all.
 
 ## The boundary against nixllm
 
-**nixgpu owns the SUBSTRATE** (drivers, vendor runtimes/SDKs, diagnostics) — the layer that is
+**nixgpu owns the SUBSTRATE** (drivers, vendor runtimes/SDKs, probes, diagnostics) — the layer that is
 true of the machine whether or not any particular application is even installed yet.
 **nixllm owns things that RUN ON it** (model servers, clients, python ML libraries) — the layer
 that exists because someone wants to talk to a specific model. The test: *would this package still
@@ -183,8 +184,8 @@ instruction. Recorded here as a finding for a future, deliberate, rollback-able 
 The operator was explicit that the bare-metal (Level 1, host-side) policy for corbet-server was
 undecided and asked for a researched recommendation, not a silent pick.
 
-**Recommendation: `vendor = "amd"`, `capabilities.diagnostics.enable = true`, every other
-capability off.**
+**Recommendation: `vendor = "amd"`, `capabilities.probes.enable = true`,
+`capabilities.diagnostics.enable = true`, every other capability off.**
 
 Reasoning:
 
@@ -203,14 +204,16 @@ Reasoning:
   ALREADY this repo's own `device-tokens` module's job (a different mechanism, Level 2, not a host
   package). Toggling this capability on AMD contributes nothing either way; leave it off for an
   honest config (nothing here would explain what it's for).
-- `diagnostics`: **on**, and this is the one real, actionable change. Infra's `hosts/nixnas.nix`
+- `probes`: **on** for the vendor-neutral graphics checks: `mesa-demos`, `libva-utils`, and
+  `wayland-utils`.
+- `diagnostics`: **on**, and this is the one real, actionable vendor-telemetry change. Infra's `hosts/nixnas.nix`
   today hand-installs `radeontop amdgpu_top nvtopPackages.amd rocmPackages.rocm-smi` directly in
   `environment.systemPackages`, with a comment explaining they were added ad hoc on 2026-07-21
   "during the shared-GPU platform work" after a ComfyUI hang was invisible until someone SSH'd in
   and grepped `dmesg`. This module's `diagnostics`/`amd` catalogue cell now names exactly those
-  four packages plus `rocminfo` and the three vendor-neutral tools (`mesa-demos`, `libva-utils`,
-  `wayland-utils`) -- turning a hand-written list into a declared one, and adding a bit of real
-  coverage (`rocminfo`, the neutral diagnostics) the hand-written list never had. See the infra
+  four packages plus `rocminfo` -- turning a hand-written list into a declared one, and adding
+  real coverage (`rocminfo`) the hand-written list never had. The separate `probes` capability
+  declares `mesa-demos`, `libva-utils`, and `wayland-utils`. See the infra
   reconciler delta below.
 
 This recommendation is a judgment call about workload placement (bare-metal vs. pods), not a

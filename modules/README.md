@@ -32,6 +32,6 @@ for the card. `nixosModules` / `systemManagerModules`:
   the metal, userland wherever the desktop is
 - `toolchain/` — vendor × capability × platform: which silicon this host has
   and what it wants to DO with it (display, hardware video, compute, AI
-  inference, 32-bit gaming, container exposure, diagnostics), each resolved to
+  inference, 32-bit gaming, container exposure, probes, diagnostics), each resolved to
   real package names per host plane via `../lib/catalogue.nix`. See
   `toolchain/README.md` for the full design and the boundary against nixllm.

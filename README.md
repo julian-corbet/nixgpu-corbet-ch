@@ -169,7 +169,7 @@ NixOS host.
   aborting the AUR reconcile for every package on the box.
 - **`toolchain`** *(NixOS + system-manager)* — **vendor × capability × platform**: which
   silicon this host has, and what it wants to DO with it (display, hardware
-  video, compute, AI inference, 32-bit gaming, container exposure, diagnostics),
+  video, compute, AI inference, 32-bit gaming, container exposure, probes, diagnostics),
   resolved to real package names per plane. See
   [modules/toolchain/README.md](modules/toolchain/README.md) for the full design
   and the boundary this module draws against the sibling
@@ -180,12 +180,13 @@ NixOS host.
     enable = true;
     vendor = "amd";
     capabilities.compute.enable = true;   # ROCm, on top of the plain driver runtime
-    capabilities.diagnostics.enable = true; # rocm-smi, rocminfo, mesa-demos, ...
+    capabilities.probes.enable = true;      # glxinfo, vainfo, wayland-info
+    capabilities.diagnostics.enable = true; # rocm-smi, rocminfo, radeontop, ...
   };
   ```
 
   Every capability defaults OFF — a cluster node running prebuilt images (whose
-  containers carry their own toolkit) wants `diagnostics` only, not the
+  containers carry their own toolkit) wants `probes` and `diagnostics` only, not the
   multi-gigabyte compute SDK; a workstation wants more. See
   `lib/catalogue.nix` for what each capability installs, per vendor, per plane,
   and why.

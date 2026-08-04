@@ -10,7 +10,7 @@
 # TWO AXES, NOT ONE. `vendor` answers "which silicon" -- unchanged from this module's first
 # version, including the PCI-ID coherence check against `stableDevicePaths` below. `capabilities.*`
 # answers "for what": display, hardware video, compute, AI inference, 32-bit gaming, container
-# exposure, diagnostics -- see ../../lib/catalogue.nix for the vendor × platform table each one
+# exposure, neutral graphics probes, vendor diagnostics -- see ../../lib/catalogue.nix for the vendor × platform table each one
 # resolves through. The OLD version of this option only ever answered "which vendor, plus one
 # binary sdk/monitoring toggle" -- too coarse to say "give me VA-API but not the multi-gigabyte
 # ROCm SDK" without reaching for the `extraPackages` escape hatch (which is exactly how the one
@@ -19,7 +19,7 @@
 #
 # EVERY CAPABILITY DEFAULTS OFF, deliberately DIFFERENT from the two booleans it replaces (`sdk`
 # and `monitoring` both defaulted ON). With two flags, "everything on once you opt in" was a
-# reasonable floor. With seven -- several of them situational (gaming32, containerExposure) rather
+# reasonable floor. With eight -- several of them situational (gaming32, containerExposure) rather
 # than broadly useful -- the same default would hand every host that enables this module a 32-bit
 # gaming stack and a container runtime hook it never asked for. This module's own catalogue is
 # closer in spirit to nixfs's `filesystems` option (declare what you actually need) than to its
@@ -59,8 +59,8 @@ let
   enabledCapabilities = lib.filter (c: cfg.capabilities.${c}.enable) capabilityNames;
 
   # Vendor-neutral entries: apply whenever the capability is enabled, regardless of `vendor` --
-  # today only `diagnostics` carries any (mesa-demos/libva-utils/wayland-utils query whatever GPU
-  # is present). `or [ ]` catches every capability that has no `neutral` bucket at all, which Nix's
+  # today only `probes` carries any (mesa-demos/libva-utils/wayland-utils query whatever GPU is
+  # present). `or [ ]` catches every capability that has no `neutral` bucket at all, which Nix's
   # `or` resolves across the WHOLE chain (`catalogue.${cap}.neutral.packages`), not just its last
   # segment -- verified: a missing `neutral` attribute falls through exactly the same as a missing
   # `packages` attribute under a present one.
