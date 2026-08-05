@@ -101,6 +101,12 @@
       ];
 
       intel.packages = [
+        # PyOpenCL is a language binding for the vendor-neutral OpenCL API. It belongs beside the
+        # compute substrate rather than in a workload domain such as nixllm: the same binding can
+        # drive imaging, scientific, or model code, and needs the Intel OpenCL runtime selected by
+        # this vendor cell to do useful work. Keeping it vendor-gated also preserves the contract
+        # that `vendor = null` contributes no compute packages.
+        { arch = "python-pyopencl"; nixpkgs = "python3Packages.pyopencl"; }
         # AUR, VERSIONED. The unversioned `intel-oneapi-basekit` is NOT a resolvable pacman sync
         # target -- confirmed live, `pacman -Si intel-oneapi-basekit` reports nothing -- it only
         # ever "worked" on a host where the versioned package below happened to already be
