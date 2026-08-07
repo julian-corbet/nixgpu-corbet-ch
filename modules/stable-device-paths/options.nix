@@ -123,6 +123,40 @@
 # it is the attrset key itself -- so an unsafe name would silently reproduce the very colon defect
 # this family exists to fix, just moved one layer up, from the by-path spelling into this one.
 #
+# ── A FIFTH STRUCTURAL LIMIT: A CONSUMER WHOSE /dev IS A RENAMED SUBSET OF THE HOST'S ────────────
+#
+# Every symlink family above assumes one thing that is true on ordinary bare metal and false on a
+# real, observed shape: that the udev daemon evaluating a rule for device X runs against the SAME
+# /dev tree the kernel populated for X. A privileged container that shares its host's sysfs
+# unnamespaced (so its own udev can see every host device, coldplug included) while keeping its own
+# private, freshly-populated /dev -- containing only a hand-picked, explicitly bind-mounted SUBSET
+# of the host's nodes, at container-local numbers the host's own enumeration never assigned them --
+# breaks that assumption structurally, not by misconfiguration. `by-vendor`, `by-driver` and
+# `by-name` alike generate `SYMLINK+="dri/by-<family>/<key>-card"`, and udev always resolves that
+# symlink's TARGET from the matched device's own kernel-reported name in the tree the rule fired
+# against -- there is no rule syntax that says "point this symlink at a DIFFERENT local path than
+# the one the kernel implies". Two failure shapes follow, and only one of them is loud:
+#
+#   - The device was never bind-mounted into this consumer's /dev at all (an ASPEED BMC console
+#     that belongs to the host, not a desktop session sharing the box). The generated symlink
+#     dangles -- harmless, because a dangling symlink fails whatever opens it, loudly.
+#   - The device WAS bind-mounted, but at a container-local number that differs from the number the
+#     rule derives from the shared, unnamespaced sysfs (a GPU deliberately renamed to a fixed local
+#     slot so a compositor's hardcoded primary-GPU probe finds it). The generated symlink still
+#     resolves -- to whatever local device the consumer's OWN renaming happens to have put at that
+#     number, which may be a real, different, physical device. This is the dangerous shape: nothing
+#     signals the mistake, because the symlink is not broken, only wrong.
+#
+# `boundLocally` (below) is the fix, and it is deliberately NOT an attempt to teach this module the
+# renaming scheme -- that scheme belongs entirely to the consumer that invented it (an LXC config's
+# own hand-authored bind-mount list, say), and baking one container's private numbering into a
+# PUBLIC module would be the same mistake `cardNamePath` itself exists to end, moved one layer
+# up. What this module CAN state generically is the one fact that makes both failure shapes above
+# preventable: whether the device this evaluation describes has a node in THIS consumer's own /dev
+# at the location the rule would derive, at all. `boundLocally = false` removes exactly the rule
+# generation this consumer cannot make correct, while leaving the device in the inventory itself --
+# still required for the reason the "WHY THE INVENTORY MUST BE COMPLETE" section above gives.
+#
 # Options only -- the NixOS and system-manager planes each consume `rules` in their own way. Both
 # planes exist because a GPU host is not necessarily a NixOS host: an Arch/CachyOS laptop with one
 # real card hits the identical renumbering hazard the moment a dock is plugged in.
@@ -154,12 +188,21 @@ let
   pciDevices = lib.filterAttrs (_name: d: d.bus == "pci") cfg.devices;
   platformDevices = lib.filterAttrs (_name: d: d.bus == "platform") cfg.devices;
 
-  # Only the entries that actually carry the identity their bus needs. An entry missing it is
-  # reported by an assertion below; excluding it here is what keeps that assertion the thing the
-  # operator sees, instead of a raw `value is null while a string was expected` thrown out of a
-  # fold two functions away.
-  identifiedPciDevices = lib.filterAttrs (_name: d: d.vendor != null && d.pciId != null) pciDevices;
-  identifiedPlatformDevices = lib.filterAttrs (_name: d: d.driver != null) platformDevices;
+  # Only the entries that actually carry the identity their bus needs, AND that this evaluation's
+  # own /dev can correctly wear a symlink for -- see this file's header, "A FIFTH STRUCTURAL
+  # LIMIT". `boundLocally` is checked here, at the SAME gate as `vendor`/`pciId`/`driver`, rather
+  # than only in `devicesByName` below: a `boundLocally = false` device is exactly as unfit for a
+  # `by-vendor`/`by-driver` rule as it is for `by-name` -- all three resolve their symlink target
+  # from the same mismatched tree, so all three must skip it the same way. An entry missing its
+  # bus identity is reported by an assertion below; excluding it here is what keeps that assertion
+  # the thing the operator sees, instead of a raw `value is null while a string was expected`
+  # thrown out of a fold two functions away. `boundLocally = false` is never itself an error --
+  # that is the whole point of the field -- so it is filtered silently here, same as a missing
+  # `vendor`/`driver`.
+  identifiedPciDevices =
+    lib.filterAttrs (_name: d: d.vendor != null && d.pciId != null && d.boundLocally) pciDevices;
+  identifiedPlatformDevices =
+    lib.filterAttrs (_name: d: d.driver != null && d.boundLocally) platformDevices;
 
   # ── The `by-name` family: keyed on the attrset key alone, bus-agnostic ──────────────────────
   #
@@ -169,7 +212,13 @@ let
   # chain), so `address` is the only thing a device needs to carry to get a rule here. A device
   # without one gets no `by-name` rule, same as it gets no `cardPath` -- see that option's own
   # `default` for why this is a graceful "never read" rather than a build-time failure.
-  devicesByName = lib.filterAttrs (_name: d: d.address != null) cfg.devices;
+  #
+  # `d.boundLocally` alongside `d.address != null`, same reasoning as `identifiedPciDevices`/
+  # `identifiedPlatformDevices` above: `by-name` is the family this evaluation's own consumer is
+  # most likely to actually READ (`cardNamePath`, `WLR_DRM_DEVICES` -- see this file's header, "A
+  # FOURTH SYMLINK FAMILY"), which makes a wrongly-resolving `by-name` symlink the most dangerous
+  # of the three, not merely as dangerous.
+  devicesByName = lib.filterAttrs (_name: d: d.address != null && d.boundLocally) cfg.devices;
 
   # Device NAMES become a symlink path component in the `by-name` rules below
   # (`SYMLINK+="dri/by-name/${name}-card"`) -- and unlike `vendor`/`pciId`/`driver` above, which are
@@ -518,6 +567,37 @@ in
               text and not an enum: the moment it became an enum something would start
               dispatching on it, and device POLICY -- who may use which card -- belongs to the
               consumer that claims the device, not to the table that records it exists.
+            '';
+          };
+
+          boundLocally = lib.mkOption {
+            type = lib.types.bool;
+            default = true;
+            example = false;
+            description = ''
+              Whether THIS evaluation's own /dev actually contains a node for this device at the
+              path its `by-vendor`/`by-driver`/`by-name` symlinks would resolve to. `true` (the
+              default, and the shape of almost every device on almost every host): the udev daemon
+              processing this device's uevent runs against the same /dev tree the kernel itself
+              populated, so every symlink family below faithfully names the real node.
+
+              Set to `false` on a device that stays in the inventory -- `role`'s neighbour, "WHY
+              THE INVENTORY MUST BE COMPLETE" above still needs it named for niri's denylist
+              complement -- but whose /dev node THIS particular evaluation deliberately never
+              receives: a container that shares its host's sysfs unnamespaced (so its own udev can
+              see the device via coldplug) while keeping a private /dev populated only by a
+              hand-picked, explicitly bind-mounted subset of the host's nodes. See this file's
+              header, "A FIFTH STRUCTURAL LIMIT", for the full argument: a rule generated for such
+              a device does not merely fail to appear, it can resolve to whatever OTHER local
+              device this consumer's own renaming happens to have put at the number the rule
+              derives -- silently misrepresenting one physical device as another.
+
+              `false` removes this device from every rule family `rules` generates (`by-vendor`,
+              `by-driver`, `by-name` alike -- the mismatch is the same one level over for each)
+              without removing it from `devices` itself. Per-entry, not per-host: the identical
+              physical device is `boundLocally = true` in the host's own evaluation of this module
+              and `false` in a container's separate one, because each states its own /dev, never
+              the other's.
             '';
           };
 
