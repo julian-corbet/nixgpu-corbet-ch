@@ -120,6 +120,10 @@
         stale copy of the host's), and could never load the result anyway, because `sys_module` is
         dropped from a container's bounding set.
 
+        This also replaces the pacman unit's local `modprobe evdi` pre-start with a condition on
+        `/sys/module/evdi`: the container must observe the host-owned module, but must never try to
+        load it itself.
+
         THE BLAST RADIUS IS WHY THIS IS NOT A FOOTNOTE. nixarch reconciles AUR packages in ONE
         `paru -S` transaction under `set -eu`. A failing DKMS build therefore aborts the reconcile
         for EVERY AUR package on the box -- the fonts, the office suite, the entire dev toolbox --

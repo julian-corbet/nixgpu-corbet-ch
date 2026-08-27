@@ -27,6 +27,10 @@ let
   };
 
   smStub = { lib, ... }: {
+    options.environment.etc = lib.mkOption {
+      type = lib.types.attrsOf lib.types.anything;
+      default = { };
+    };
     options.nixarch.packages = {
       enable = lib.mkOption { type = lib.types.bool; default = false; };
       aur = lib.mkOption { type = lib.types.listOf lib.types.str; default = [ ]; };
@@ -159,6 +163,34 @@ let
         nixgpu.displaylink = { enable = true; assumeEvdiInstalled = true; };
         nixarch.packages.enable = true;
       }]).config.nixarch.packages.assumeInstalled == [ "evdi=1.15.0" ];
+
+    "assumeEvdiInstalled disables the container-local modprobe" =
+      let
+        c = (evalSm [{
+          nixgpu.displaylink = { enable = true; assumeEvdiInstalled = true; };
+          nixarch.packages.enable = true;
+        }]).config;
+        dropIn = c.environment.etc."systemd/system/displaylink.service.d/10-nixgpu-external-evdi.conf".text;
+      in
+      lib.hasInfix "ConditionPathIsDirectory=/sys/module/evdi" dropIn
+      && lib.hasInfix "ExecStartPre=" dropIn;
+
+    "a locally owned evdi leaves the vendor modprobe intact" =
+      (evalSm [{
+        nixgpu.displaylink.enable = true;
+        nixarch.packages.enable = true;
+      }]).config.environment.etc == { };
+
+    "a custom archUnit names the matching drop-in" =
+      (evalSm [{
+        nixgpu.displaylink = {
+          enable = true;
+          assumeEvdiInstalled = true;
+          archUnit = "dlm.service";
+        };
+        nixarch.packages.enable = true;
+      }]).config.environment.etc
+      ? "systemd/system/dlm.service.d/10-nixgpu-external-evdi.conf";
 
     # The version is a RANGE decision (it must satisfy `evdi<1.16`), not a description of what is
     # loaded -- libevdi's own is_evdi_compatible() gates on major==1 && minor>=9.

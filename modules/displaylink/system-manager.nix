@@ -93,6 +93,22 @@ in
       assumeInstalled = lib.optional cfg.assumeEvdiInstalled "evdi=${cfg.evdiVirtualVersion}";
     };
 
+    # The Arch displaylink package hardcodes `ExecStartPre=/sbin/modprobe evdi`. That is correct on
+    # a normal Arch host and impossible in the exact container case `assumeEvdiInstalled` models:
+    # the host owns the shared kernel and the container has no sys_module capability (nor a usable
+    # /lib/modules tree). Reset only that pre-start, and retain the real dependency as a condition
+    # on the host-owned module being visible through the shared /sys. A missing module is therefore
+    # a clean skipped start, not the vendor unit's five-second restart loop.
+    environment.etc = lib.mkIf cfg.assumeEvdiInstalled {
+      "systemd/system/${cfg.archUnit}.d/10-nixgpu-external-evdi.conf".text = ''
+        [Unit]
+        ConditionPathIsDirectory=/sys/module/evdi
+
+        [Service]
+        ExecStartPre=
+      '';
+    };
+
     systemd.services.nixgpu-displaylink-ensure-running = {
       description = "Ensure the pacman-shipped ${cfg.archUnit} is running (Arch never enables a shipped unit)";
 

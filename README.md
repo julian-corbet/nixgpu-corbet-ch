@@ -168,7 +168,9 @@ NixOS host.
   same system. The NixOS plane is Wayland-shaped and refuses to run beside
   nixpkgs' own X11-keyed DisplayLink module; the Arch plane carries the
   dependency override that stops one unsatisfiable `evdi` dependency from
-  aborting the AUR reconcile for every package on the box.
+  aborting the AUR reconcile for every package on the box, and replaces the
+  vendor unit's impossible container-local `modprobe` with a condition on the
+  host-owned module visible through `/sys`.
 - **`toolchain`** *(NixOS + system-manager)* — **vendor × capability × platform**: which
   silicon this host has, and what it wants to DO with it (display, hardware
   video, compute, AI inference, 32-bit gaming, container exposure, probes, diagnostics),
