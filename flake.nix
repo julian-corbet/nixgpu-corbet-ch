@@ -146,7 +146,12 @@
       #   nixosModules.kernel - optional dmem accounting / TTM eviction-order patches
       #   (the pressure-watcher core runs on stock kernels reading sysfs)
 
-      lib = { };
+      lib = {
+        # Temporary source-level correction for evdi v1.15.0's broken USB-removal path. Host
+        # modules decide how to build against their exact kernel; this repo owns the behavior and
+        # the pinned upstream commits. See lib/evdi-hot-unplug.nix.
+        evdiHotUnplug = { pkgs }: import ./lib/evdi-hot-unplug.nix { inherit pkgs; };
+      };
 
       # Renders every nixidy module here against the real module system it
       # targets, from the placeholder values in `examples/all`. This is what makes
@@ -180,6 +185,10 @@
           # modules generate (a modprobe line whose absence is a silent no-op, an ExecStart), and
           # a stub gets at those values without either backend's closure.
           evdi = import ./checks/evdi.nix {
+            pkgs = nixpkgs.legacyPackages.${system};
+          };
+
+          evdi-hot-unplug = import ./checks/evdi-hot-unplug.nix {
             pkgs = nixpkgs.legacyPackages.${system};
           };
 

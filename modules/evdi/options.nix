@@ -23,11 +23,12 @@
 # pointing at a device that does not exist -- a silent no-op, which is why this module always
 # writes the parameter and why `deviceCount` cannot be set to 0 here.
 #
-# ⚠ 2. THE DEVICES ARE PERMANENT, AND THAT IS THE WHOLE DESIGN. The N devices are created at
-# `module_init()` with `parent = NULL`, and evdi's USB-removal notifier only tears down devices
-# whose parent IS the departing USB device. Those N therefore live for the life of the module --
-# dock attached or not, plugged or unplugged, forever. Two consequences follow, and both are the
-# reason this shape was chosen over letting DisplayLinkManager mint devices on demand:
+# ⚠ 2. THE PRE-CREATED DEVICES ARE PERMANENT, AND THEIR USB LINK MUST NOT BE. The N devices are
+# created at `module_init()` with no USB parent and therefore live for the life of the module --
+# dock attached or not, forever. On dock removal evdi must detach the USB relationship while
+# preserving those N cards; on the next attachment DisplayLinkManager can then reuse the same
+# pre-created card. Two consequences follow, and both are the reason this shape was chosen over
+# letting DisplayLinkManager mint devices on demand:
 #
 #   (a) ATTACHING A DOCK IS A CONNECTOR HOTPLUG, NOT A DEVICE HOTPLUG. The card is already there;
 #       what arrives is a connected connector -- a udev "change" event with HOTPLUG=1 on an
@@ -41,6 +42,13 @@
 #       it. evdi's own attach path reuses a free pre-created device before allocating a new one
 #       (evdi_platform_drv.c:130-149), so a fixed count is not merely compatible with on-demand
 #       attach -- it is what that path expects.
+#
+#   evdi v1.15.0 BREAKS this contract: its usb_register_notify() callback compares the action to
+#   BUS_NOTIFY_DEL_DEVICE instead of USB_DEVICE_REMOVE, so it skips removal entirely. The stale
+#   evdi.0 remains linked to the departed dock and the next attachment allocates evdi.1 -- invisible
+#   to any compositor, bind mount or DeviceAllow= pinned to the deliberately stable evdi.0. This
+#   repo carries the two upstream PR #581 commits in `lib.evdiHotUnplug`; hosts must build their
+#   kernel-specific package from that correction until evdi releases it.
 #
 # ⚠ 3. ONE evdi DEVICE = ONE CONNECTOR = ONE MONITOR. There is no multi-head evdi card. So
 # `deviceCount` must be at least the maximum number of DisplayLink monitors that will ever be lit

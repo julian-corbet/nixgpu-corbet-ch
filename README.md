@@ -155,10 +155,12 @@ NixOS host.
   dock draws through. ⚠ `initial_device_count` defaults to **0** upstream, so a
   bare module load registers no device at all and every other signal says it
   worked; this module always writes the parameter. The N devices are created at
-  `module_init()` with no parent and are never torn down, so plugging a dock is
-  a **connector** hotplug on a card that is already there — which is why both
-  wlroots and Smithay handle it with no DisplayLink-specific support. One evdi
-  device = one connector = one monitor.
+  `module_init()` and survive dock removal, while their USB relationship must be
+  detached so the same card can be reused. evdi v1.15.0 gets that notifier wrong
+  and leaks a stale card; `lib.evdiHotUnplug` carries the two upstream PR #581
+  commits until a release contains them. With that correction, plugging a dock is
+  a **connector** hotplug on a card that is already there. One evdi device = one
+  connector = one monitor.
 - **`displaylink`** *(NixOS + system-manager)* — DisplayLinkManager, evdi's
   proprietary userland, modelled with its real dependency on the module being
   loaded. Deliberately a separate module from `evdi`: the two halves are
