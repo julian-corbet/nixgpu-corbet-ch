@@ -120,9 +120,14 @@ These are about the machine underneath it — and they are offered on both the
 NixOS and the Arch/CachyOS plane, because a GPU host is not necessarily a
 NixOS host.
 
-- **`stableDevicePaths`** *(NixOS + system-manager)* — the host's **complete DRM
+- **`stableDevicePaths`** *(NixOS + system-manager, options-only in Home
+  Manager)* — the host's **complete DRM
   device inventory**, and stable `/dev/dri` symlinks generated from it, so
   `device-tokens`' paths resolve regardless of DRM enumeration order.
+
+  The Home Manager projection exposes the identical typed inventory and
+  derived paths for user-session translators such as compositor config
+  generators. It never writes udev rules; only the host plane does that.
 
   ```nix
   nixgpu.stableDevicePaths.devices = {

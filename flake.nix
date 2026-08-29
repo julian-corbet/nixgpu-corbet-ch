@@ -142,6 +142,15 @@
         default = self.systemManagerModules.toolchain;
       };
 
+      # Options-only projection for user-session consumers that must translate
+      # the same complete device inventory into compositor configuration. It
+      # derives stable paths and assertions but writes no udev rules; the host
+      # plane remains the sole owner of materializing those paths.
+      homeManagerModules = {
+        stableDevicePaths = ./modules/stable-device-paths/options.nix;
+        default = self.homeManagerModules.stableDevicePaths;
+      };
+
       # Planned NixOS-side module, not yet extracted:
       #   nixosModules.kernel - optional dmem accounting / TTM eviction-order patches
       #   (the pressure-watcher core runs on stock kernels reading sysfs)
